@@ -1,0 +1,3 @@
+"""
+FastAPI main application entrypoint.
+"""
