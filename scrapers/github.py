@@ -91,12 +91,13 @@ def fetch_pull_requests(owner:str, repo:str):
 
 
 DATA=fetch_pull_requests("tiangolo","fastapi")
-for pr in DATA:
-    if len(pr.comments) > 0:
-        print(f"BINGO! PR #{pr.number} has {len(pr.comments)} comments!")
-        print(pr.comments[0]) # Print the very first comment object
-        break
+# for pr in DATA:
+#     if len(pr.comments) > 0:
+#         print(f"BINGO! PR #{pr.number} has {len(pr.comments)} comments!")
+#         print(pr.comments[0]) # Print the very first comment object
+#         break
 
+print(DATA[6])
 # Example usage:
 # owner = "Shubham-Jain52"
 # repo = "mosaic"
