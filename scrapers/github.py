@@ -24,12 +24,13 @@ def fetch_PR_comments(pr_number:int,owner:str,repo:str):
             return []
         comments_data = response.json()
         for comment in comments_data:
+            user = comment.get("user") or {}
             clean_comment_data = Review_Comment_Structure(
-                comment_id=comment.get("comment_id"),
+                comment_id=comment.get("id"),
                 comment_body=comment.get("body"),
                 diff_hunk=comment.get("diff_hunk"),
                 file_path=comment.get("path"),
-                author=comment.get("user").get("login")
+                author=user.get("login"),
             )
             comments.append(clean_comment_data)
 
@@ -88,20 +89,12 @@ def fetch_pull_requests(owner:str, repo:str):
     return all_prs
 
 
+if __name__ == "__main__":
+    from core.database import init_db, save_data_to_db
 
+    init_db()
+    pull_requests = fetch_pull_requests("tiangolo", "fastapi")
+    save_data_to_db(pull_requests)
 
-DATA=fetch_pull_requests("tiangolo","fastapi")
-# for pr in DATA:
-#     if len(pr.comments) > 0:
-#         print(f"BINGO! PR #{pr.number} has {len(pr.comments)} comments!")
-#         print(pr.comments[0]) # Print the very first comment object
-#         break
-
-print(DATA[6])
-# Example usage:
-# owner = "Shubham-Jain52"
-# repo = "mosaic"
-# pull_requests = fetch_pull_requests(owner, repo)
-# print(f"Found {len(pull_requests)} pull requests for {owner}/{repo}")
-# for pr in pull_requests:
-#     print(f"PR #{pr['number']}: {pr['title']} by {pr['user']['login']}")
+    total_comments = sum(len(pr.comments) for pr in pull_requests)
+    print(f"Saved {len(pull_requests)} PRs and {total_comments} comments to mosaic.db")
