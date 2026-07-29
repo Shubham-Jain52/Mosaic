@@ -7,28 +7,61 @@
 | Language | Python ≥ 3.9 |
 | CLI | Typer (`mosaic` console script) |
 | HTTP | `requests` |
-| Config | `python-dotenv` → `.env` |
+| Config | `python-dotenv` → `.env`; project metadata under `.mosaic/` |
 | ORM / DB | SQLAlchemy 2.x → SQLite (`mosaic.db`) |
-| Packaging | `pyproject.toml` + setuptools |
+| Vectors | Chroma persistent client under `.mosaic/chroma/` |
+| Packaging | `pyproject.toml` + setuptools (`mosaic-cli`; optional extra `[local]`) |
+
+## Phases (technical)
+
+| Phase | Status |
+|-------|--------|
+| Foundation | Shipped — ingest, embeddings, index, sync |
+| v1.0.0 | Target — `mosaic check` (BYOK chat + retrieval); see below |
+| Post-1.0.0 | [ROADMAP.md](ROADMAP.md) |
 
 ## Repository layout
 
+Matches the real tree (stubs under `api/` / `automation/` are reserved for later):
+
 ```text
-cli/main.py          # mosaic init / scrape / build
-core/config.py       # parse repo URL, load/write .env, embedding settings
-core/models.py       # dataclasses (PR_Structure, Comment_Structure)
-core/database.py     # ORM models, init_db, save_data_to_db (merge upsert)
-core/repository.py   # read API for RAG consumers
-scrapers/github.py   # paginated GitHub API client
-ai/embeddings.py     # API embedders + optional fastembed local; ping / HF metadata verify
-pipeline/indexer.py  # Chroma vector index from comment corpus
-docs/PRD.md, TRD.md
-pyproject.toml       # package mosaic-cli; optional extra [local]
-requirements.txt     # API-only base
+cli/                 # Typer: init, build, sync, help (+ check in v1.0.0)
+  main.py
+core/
+  config.py          # parse repo URL, load/write .env, embedding settings, .mosaic/config.json
+  models.py          # dataclasses (PR_Structure, Comment_Structure)
+  database.py        # ORM models, init_db, save_data_to_db (merge upsert)
+  repository.py      # read API for corpus / RAG consumers
+  sync_state.py      # .mosaic/sync_state.json read/write
+scrapers/
+  github.py          # paginated GitHub API client (not a CLI command)
+ai/
+  embeddings.py      # API embedders + optional fastembed; ping / HF metadata verify
+  analyzer.py        # v1.0.0: Feedback + BaseAnalyzer (planned)
+pipeline/
+  indexer.py         # Chroma full + delta index from comment corpus
+api/                 # placeholder (hosted API — not v1.0.0)
+automation/          # placeholder (scheduler — not v1.0.0)
+docs/                # PRD, TRD, ROADMAP
+tests/
+pyproject.toml
+requirements.txt
 requirements-local.txt
 ```
 
+Earlier drafts listed `mosaic scrape` as a CLI command; scrape is an internal step of `build` / `sync` only.
+
 ## Configuration
+
+Config is **per project** (not a global `~/.mosaic/config.toml`) so multi-repo usage is “one working directory per repo.”
+
+| Location | Contents |
+|----------|----------|
+| `.env` | `GITHUB_TOKEN`, `REPO_OWNER`, `REPO_NAME`, `REPO_URL`; `EMBEDDING_*` / provider keys; (v1.0.0) BYOK chat key / base URL / model for `check` |
+| `.mosaic/config.json` | Non-secret build metadata: embedding backend/provider/model, chroma path, collection name, `built_at` |
+| `.mosaic/sync_state.json` | `known_pr_numbers`, `indexed_comment_ids`, `embedding_model`, `last_synced_at`, `last_full_build_at` |
+| `.mosaic/chroma/` | Persistent Chroma store |
+| `mosaic.db` | SQLite corpus |
 
 `.env` keys written by `mosaic init`:
 
@@ -45,13 +78,14 @@ requirements-local.txt
 - `git@github.com:owner/repo.git`
 - `owner/repo`
 
-## Auth model (v1)
+## Auth model (foundation / v1)
 
 - **User Personal Access Token** collected interactively (or via `--token`).
 - Token is used for all GitHub API calls; rate limits belong to that user.
-- No OAuth app or GitHub App in v1.
+- No OAuth app or GitHub App in foundation / v1.0.0.
+- **BYOK** for embeddings (optional) and for **chat** used by `mosaic check` (required for analysis at v1.0.0).
 
-Required token capabilities for private repos: ability to read pull requests and review comments on the target repository (classic: `repo`; fine-grained: Pull requests Read).
+Required token capabilities for private repos: ability to read pull requests and review comments (classic: `repo`; fine-grained: Pull requests Read).
 
 ## GitHub API usage
 
@@ -66,7 +100,7 @@ All list endpoints paginate with `per_page=100` until a short/empty page.
 
 Headers: `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `User-Agent: Mosaic-CLI`, `X-GitHub-Api-Version: 2022-11-28`.
 
-On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including reset time. No automatic retry queue in v1.
+On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including reset time. No automatic retry queue in foundation.
 
 ## Database schema
 
@@ -96,7 +130,7 @@ On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including re
 
 - Primary keys + SQLAlchemy `session.merge()` upsert on every scrape.
 - Re-scrape updates existing rows; does not insert duplicates.
-- **Single-repo DB** in v1: changing `REPO_*` to another repository requires a fresh `mosaic.db` (or a future migration that adds a repo key).
+- **Single-repo DB** in foundation: changing `REPO_*` to another repository requires a fresh `mosaic.db` (or a future migration that adds a repo key).
 
 ## Read module (`core.repository`)
 
@@ -109,26 +143,30 @@ On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including re
 
 ## CLI commands
 
-| Command | Behavior |
-|---------|----------|
-| `mosaic init` | Prompt (or `--repo` / `--token`), write `.env`, `init_db()` |
-| `mosaic build` | Embedder setup + full scrape + full Chroma index + sync state |
-| `mosaic sync` | PRs not in SQLite → delta scrape + delta vectorize + update sync state |
+| Command | Status | Behavior |
+|---------|--------|----------|
+| `mosaic init` | Shipped | Prompt (or `--repo` / `--token`), write `.env`, `init_db()` |
+| `mosaic build` | Shipped | Embedder setup + full scrape + full Chroma index + sync state |
+| `mosaic sync` | Shipped | PRs not in SQLite → delta scrape + delta vectorize + update sync state |
+| `mosaic help` | Shipped | Product overview |
+| `mosaic check` | **v1.0.0** | Stdin diff → retrieve → BYOK LLM → graded cited output; exit 0 |
 
-## Embedding + vector index
+## Embedding + vector index (shipped)
 
 | Piece | Path / choice |
 |-------|----------------|
-| Local model | Optional `fastembed` (ONNX) via `mosaic-cli[local]`; default `BAAI/bge-small-en-v1.5`; cache is user/HF cache, not project tree |
+| Local embeddings | Optional `fastembed` (ONNX) via `mosaic-cli[local]`; default `BAAI/bge-small-en-v1.5`; cache is user/HF cache, not project tree |
 | API providers | `openai`, `huggingface`, `openai_compatible` (custom base URL) |
 | Config | `.env` (`EMBEDDING_*`, keys) + `.mosaic/config.json` |
-| Sync state | `.mosaic/sync_state.json` (known PRs, indexed ids, `last_synced_at`) |
-| Vector store | Chroma persistent client at `.mosaic/chroma/`, collection `mosaic_comments` |
+| Sync state | `.mosaic/sync_state.json` |
+| Vector store | Chroma at `.mosaic/chroma/`, collection `mosaic_comments` |
 | Document unit | One `get_comment_corpus()` entry → one vector (no extra chunking yet) |
 
 **Verification:** no name allowlists. OpenAI/compatible = embeddings ping (`"ping"`). Hugging Face = Hub metadata (`pipeline_tag` / tags must be embedding-capable) then Inference feature-extraction ping.
 
-Install:
+**Note:** Local embeddings ≠ local chat. Chat for `mosaic check` is a separate BYOK path (next section). Fully local chat is post-1.0.0 ([ROADMAP.md](ROADMAP.md)).
+
+Install (foundation):
 
 ```bash
 python -m venv .venv
@@ -140,22 +178,113 @@ mosaic build
 mosaic sync
 ```
 
-Base install does **not** pull PyTorch/`sentence-transformers`. Local path needs `pip install 'mosaic-cli[local]'` (or `-e '.[local]'`).
+Base install does **not** pull PyTorch/`sentence-transformers`. Local embeddings need `pip install 'mosaic-cli[local]'` (or `-e '.[local]'`).
+
+---
+
+## `mosaic check` — v1.0.0 Technical Design
+
+This section is the source of truth for implementing `check`. It supersedes any earlier vague “LLM adapter” / “ask-first RAG” sketches. `mosaic ask` / `describe` are **not** designed here.
+
+### Product behavior
+
+```text
+git diff main | mosaic check
+```
+
+Advisory soft gate only: print feedback; **exit code 0** always in v1.0.0. No git pre-push hard gate.
+
+### Typed seam (`Feedback`)
+
+In `ai/analyzer.py` (or equivalent), the only object that leaves the analyzer into CLI / formatters / future TUI:
+
+```text
+Feedback:
+  issue: str
+  severity: Literal["blocking", "suggestion", "nit"]
+  file_path: str
+  line_hint: str | None
+  cited_prs: list[int]
+```
+
+Raw LLM response text must not leak past this module.
+
+### `BaseAnalyzer`
+
+```text
+BaseAnalyzer (ABC):
+  check(diff_hunk: str, past_comments: list[dict]) -> list[Feedback]
+```
+
+- Prompt the LLM for structured JSON matching `Feedback`, then parse into real `Feedback` objects.
+- **Decision / validation** (normalize severity, drop invent-without-citations when retrieval is empty, etc.) stays in **pure functions** separate from the LLM I/O call (`codeStruct` typed-seam / pure-logic split).
+- Do not build `describe` / `ask` in this module for v1.0.0; a short comment that the seam could support them later is fine.
+
+### BYOK chat module (separate from embeddings)
+
+- New chat/completions client under `ai/` (e.g. beside `embeddings.py`), **OpenAI-compatible** API: user-provided API key, optional base URL, model name.
+- Reuse the same BYOK spirit as embedding API keys; do **not** require a 1:1 mapping to every embedding backend (local fastembed has no chat).
+- **No local chat LLM in v1.0.0.**
+- Log an approximate LLM **call count** when `check` runs (cost visibility).
+
+### Diff parsing
+
+- New small module (preferred: `core/diff_parser.py`): raw unified diff text → iterable per-file / per-hunk chunks (`file_path`, hunk header, body).
+- Prefer stdlib / manual `@@` hunk-header parsing; **no** new heavy dependency if avoidable.
+- `difflib` is not a unified-diff splitter; use explicit unified-diff parsing.
+
+### Retrieval
+
+- For each hunk, query the **existing** Chroma collection (thin query helper on the current indexer/client — do not build a second vector stack).
+- Default **top-k = 5**, configurable (e.g. CLI `--top-k`).
+- Past comments passed into `BaseAnalyzer.check` as plain dicts (id, text, `pr_number`, file_path, …) from retrieval metadata / corpus.
+
+### CLI orchestration
+
+- New `mosaic check` Typer command: read stdin → parse → retrieve per hunk → analyze → print formatted output (table or clear sections, **not** raw JSON).
+- Keep orchestration thin; prefer a shared runner (e.g. under `pipeline/` or `ai/`) so a future **TUI** can call the same pipeline without rewriting retrieval/analyzer.
+- Exit 0 always (advisory).
+
+### Blank-drop and swap verification
+
+Before calling `check` “done”:
+
+1. **Blank-drop:** empty / irrelevant / no-op diff → “not enough relevant history to comment” (or equivalent), **not** hallucinated generic advice.
+2. **Swap:** two genuinely different diffs → genuinely different feedback, not identical boilerplate.
+
+Cheap checks: pipe empty stdin / noop diff; run two real diffs and compare citations/issues by eye.
+
+### Evaluation script
+
+- Small script e.g. `tests/eval_check.py`: a handful of known diffs with expected severity/category or “empty history” outcomes.
+- Manual sanity check for v1.0.0 quality; need not be exhaustive, but must exist.
+
+### Boundaries (implementation)
+
+- Do not modify `scrapers/`, existing `core/models.py`, or the ingest/sync pipeline unless fixing a blocking bug.
+- Do not build `describe`, `ask`, or a pre-push hard gate in the v1.0.0 session.
+
+---
+
 ## Error handling requirements
 
 - Missing `.env` / token / repo → clear `RuntimeError` directing user to `mosaic init`
 - Invalid URL → `ValueError` surfaced as CLI exit code 1
 - Non-200 PR list → `GitHubAPIError` with status snippet
 - Per-PR comment failures log and continue with comments collected so far for that PR when appropriate; PR list failures abort the scrape
+- **v1.0.0 `check`:** missing index or missing BYOK chat config → clear error; thin retrieval → explicit empty-history messaging (not invented advice)
 
 ## Security
 
 - `.env` is gitignored
 - PAT never printed in full after init (`***` only)
 - Prefer fine-grained tokens scoped to one repository when possible
+- BYOK chat keys stay in `.env`; never commit
 
 ## Implemented so far / next technical phase
 
-**Done:** config, CLI init/scrape/build, full pagination, labeled comments, SQLite upsert, repository read helpers, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma index.
+**Done (foundation):** per-project config (`.env` + `.mosaic/`), CLI `init` / `build` / `sync` / `help`, full pagination, labeled comments, SQLite upsert, repository read helpers, sync state + delta sync, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma full + delta index.
 
-**Next:** incremental sync, `mosaic ask` / LLM answers, token chunking, optional multi-repo schema.
+**Next (v1.0.0):** implement `mosaic check` per the section above (diff parser, Chroma query helper, BYOK chat client, `Feedback` / `BaseAnalyzer`, CLI + formatting, blank-drop/swap checks, eval script).
+
+**After v1.0.0:** [ROADMAP.md](ROADMAP.md) — `ask`, `describe`, hard gate, local chat LLM, TUI, PyPI, sync gaps, etc.
