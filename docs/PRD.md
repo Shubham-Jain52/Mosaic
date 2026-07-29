@@ -15,9 +15,10 @@ Mosaic is a CLI tool that connects to a GitHub repository, scrapes pull-request 
 
 - OAuth / GitHub App install flows
 - Multi-repo databases
-- Incremental sync of only new PRs (planned later)
+- Re-fetching new comments on *existing* PRs during sync (v1 sync is new PR numbers only)
 - `mosaic ask` / LLM answering (next phase)
 - Web UI / hosted API product
+- Auto sync-on-ask / GitHub Actions cron (later)
 
 ## Personas
 
@@ -35,53 +36,52 @@ mosaic init
 2. Prompt for GitHub PAT (hidden input).
 3. Write `GITHUB_TOKEN`, `REPO_OWNER`, `REPO_NAME`, `REPO_URL` to `.env`.
 4. Create SQLite schema in `mosaic.db`.
-5. Instruct user to run `mosaic scrape`.
+5. Instruct user to run `mosaic build`.
 
-### 2. First full scrape
-
-```text
-mosaic scrape
-```
-
-1. Load token + repo from `.env`.
-2. Paginate through **all** PRs (`state=all`).
-3. For each PR, paginate all review comments.
-4. Upsert into SQLite (no duplicate rows on re-run).
-5. Print PR and comment counts.
-
-### 3. Build vector index
+### 2. First build (scrape + index)
 
 ```text
 mosaic build
 ```
 
-1. Require a non-empty comment corpus in `mosaic.db`.
-2. Prompt for embedding backend: **api** (default) or **local** (`mosaic-cli[local]` / fastembed).
-3. If API: choose provider (**openai** / **huggingface** / **openai_compatible**), enter key + model; verify via live ping (HF also checks Hub metadata for embedding pipeline tags).
-4. Persist settings to `.env` + `.mosaic/config.json`.
-5. Embed each corpus comment (one comment = one vector doc) into Chroma at `.mosaic/chroma/`.
+1. Configure embedding backend (API or local fastembed) and persist settings.
+2. Full paginated scrape of all PRs and labeled comments into SQLite.
+3. Full Chroma vector index (one comment = one doc).
+4. Write `.mosaic/sync_state.json` (known PRs, indexed ids, timestamps).
+5. Print “Mosaic is ready for your questions.”
+
+### 3. Sync (delta updates)
+
+```text
+mosaic sync
+```
+
+1. Require a prior `build` (embeddings configured).
+2. List GitHub PR numbers; compare to SQLite / sync state.
+3. If none missing → “Everything up to date.”
+4. Else fetch only missing PRs → save → delta vectorize → update sync state → ready message.
 
 ### 4. Read for RAG (library)
 
 Downstream code calls:
 
 - `get_all_comments()` / `get_comments_for_pr()`
-- `get_all_prs()`
+- `get_all_prs()` / `get_pr_numbers()`
 - `get_comment_corpus()` — text blobs for embedding
-- `get_embedder()` / `build_vector_index()` — embedding + Chroma index
+- `build_vector_index()` / `index_corpus_delta()` — full or delta Chroma index
 
 ## Functional requirements
 
 | ID | Requirement |
 |----|-------------|
-| FR-1 | CLI entry point `mosaic` with `init`, `scrape`, and `build` commands |
+| FR-1 | CLI entry point `mosaic` with `init`, `build`, and `sync` commands |
 | FR-2 | Accept GitHub HTTPS URL, SSH URL, or `owner/repo` shorthand |
 | FR-3 | Store PAT and repo identity in `.env` (gitignored) |
-| FR-4 | Scrape all PR pages and all review-comment pages on first ingest |
+| FR-4 | `mosaic build` scrapes all PRs + comments and creates a Chroma vector DB |
 | FR-5 | Persist PRs and comments in SQLite with upsert-on-primary-key |
 | FR-6 | Expose read helpers for comments and an embedding-oriented corpus |
 | FR-7 | Fail clearly on missing config or GitHub rate-limit exhaustion |
-| FR-8 | `mosaic build` configures local or API embeddings and creates a Chroma vector DB |
+| FR-8 | `mosaic sync` imports only PR numbers not yet in SQLite and delta-indexes them |
 | FR-9 | API path verifies embeddings via live ping; Hugging Face also checks Hub model metadata |
 
 ## Data captured
@@ -100,14 +100,14 @@ Fields: comment_id, comment_type, pr_number, body, diff_hunk, file_path, author,
 
 ## Success criteria
 
-- A user can go from zero config → connected repo → populated `mosaic.db` using only the CLI.
-- Re-running `mosaic scrape` does not inflate row counts (duplicates are merged).
-- `get_comment_corpus()` returns non-empty text entries after a successful scrape.
+- A user can go from zero config → connected repo → indexed Chroma DB via `init` + `build`.
+- Re-running ingest paths does not inflate row counts (duplicates are merged).
+- `mosaic sync` with no new PRs reports up to date; with new PRs only indexes the delta.
 
 ## Future work
 
-- Incremental update / ingestion of new PRs only
-- Deduplication / clustering of similar review feedback
 - `mosaic ask` / LLM retrieval answers
+- Re-sync comments on existing PRs; automation calling `sync`
+- Deduplication / clustering of similar review feedback
 - Token-based chunking of long comments
 - Multi-repo support

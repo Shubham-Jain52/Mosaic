@@ -2,16 +2,19 @@
 
 CLI tool that turns a GitHub repository’s PR feedback into a local dataset and vector index for RAG.
 
-Connect a repo with a Personal Access Token, scrape review and conversation comments into SQLite, then embed them (API or optional on-device) into Chroma.
+Connect a repo with a Personal Access Token, run a full build (scrape + embeddings + Chroma), then use `mosaic sync` to pull only new PRs.
 
 ## Features
 
 - Connect one GitHub repo via PAT (`mosaic init`)
-- Full first scrape of PRs plus labeled comments: review (inline), issue (conversation), and review summaries
-- SQLite persistence with upsert-safe IDs
-- Vector index build (`mosaic build`) with OpenAI, Hugging Face, or OpenAI-compatible APIs
-- Optional local embeddings via **fastembed** (`mosaic-cli[local]`) — ONNX, no PyTorch in the base install
-- `mosaic help` for a quick command overview
+- **`mosaic build`** — full scrape of labeled comments + embedder setup + vector index
+- **`mosaic sync`** — fetch PRs not yet in SQLite, vectorize only the delta
+- Comment kinds: review (inline), issue (conversation), review summaries
+- Embeddings: OpenAI, Hugging Face, OpenAI-compatible APIs, or optional **fastembed** (`mosaic-cli[local]`)
+- Sync bookmarks in `.mosaic/sync_state.json` (`last_synced_at`, known PR numbers, indexed comment IDs)
+- `mosaic help` for a quick overview
+
+**V1 sync limitation:** only new PR *numbers* are imported (new comments on existing PRs are not re-fetched yet).
 
 ## Requirements
 
@@ -40,11 +43,11 @@ pip install -r requirements.txt && pip install -e .
 ```bash
 mosaic help                  # what Mosaic does + command list
 mosaic init                  # prompt for repo URL + PAT → .env, create tables
-mosaic scrape                # fetch all PRs and comments → mosaic.db
-mosaic build                 # choose embeddings, build Chroma index under .mosaic/
+mosaic build                 # full scrape + embeddings + Chroma index
+mosaic sync                  # later: only new PRs + delta vectors
 ```
 
-For a fresh real scrape after test data, delete `mosaic.db` and run `mosaic init` again before scraping.
+For a fresh real build after test data, delete `mosaic.db` (and optionally `.mosaic/`) then re-run `init` + `build`.
 
 ## Commands
 
@@ -52,22 +55,22 @@ For a fresh real scrape after test data, delete `mosaic.db` and run `mosaic init
 |---------|-------------|
 | `mosaic help` | Product overview and available commands |
 | `mosaic init` | Save repo URL + PAT to `.env`, create SQLite schema |
-| `mosaic scrape` | Paginate all PRs and comments into `mosaic.db` |
-| `mosaic build` | Configure embeddings and build the Chroma vector DB |
+| `mosaic build` | Full ingest + configure embeddings + build Chroma index |
+| `mosaic sync` | Delta: PRs missing from DB → save → vectorize → ready |
 
 Use `mosaic <command> --help` for flags on a specific command.
 
 ## Project layout
 
 ```text
-cli/           Typer CLI (init, scrape, build, help)
-core/          Config, models, SQLite ORM, repository read API
+cli/           Typer CLI (init, build, sync, help)
+core/          Config, models, SQLite ORM, repository, sync_state
 scrapers/      GitHub API client (PRs + labeled comments)
 ai/            Embedding backends (API + optional fastembed)
-pipeline/      Chroma indexer
+pipeline/      Chroma indexer (full + delta)
 docs/          PRD and TRD
 .env           Secrets and connection settings (gitignored)
-.mosaic/       Chroma store + build config (gitignored)
+.mosaic/       Chroma store, config.json, sync_state.json (gitignored)
 mosaic.db      Local SQLite corpus
 ```
 
@@ -77,6 +80,7 @@ mosaic.db      Local SQLite corpus
 |----------|----------|
 | `.env` | `GITHUB_TOKEN`, `REPO_*`, embedding keys / backend settings |
 | `.mosaic/config.json` | Non-secret build metadata (model name, chroma path, …) |
+| `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at` |
 | `.mosaic/chroma/` | Persistent vector index |
 
 Do not commit `.env` or `.mosaic/`.
@@ -89,6 +93,6 @@ Do not commit `.env` or `.mosaic/`.
 
 ## Status
 
-**Current:** ingest → SQLite → embedding config → Chroma index.
+**Current:** init → build (scrape + index) → sync (delta PRs).
 
-**Next (not shipped yet):** `mosaic ask` / LLM answers, incremental sync of new PRs, token-based chunking of long comments.
+**Next:** `mosaic ask` / LLM answers; re-sync comments on existing PRs; automation (cron / Actions) calling `sync`.
