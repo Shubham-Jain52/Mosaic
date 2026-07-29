@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "mosaic-cli"
 version = "0.1.0"
 description = "Build a review-comment dataset from a GitHub repository for RAG."
-readme = "docs/PRD.md"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "certifi==2026.5.20",

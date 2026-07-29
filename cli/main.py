@@ -35,6 +35,36 @@ app = typer.Typer(
 )
 
 
+@app.command("help")
+def help_cmd() -> None:
+    """Show what Mosaic is and which commands are available."""
+    typer.echo(
+        """
+Mosaic
+------
+CLI tool that connects to a GitHub repo, scrapes PR review / conversation
+comments into SQLite, then builds a vector index for RAG over that feedback.
+
+Typical flow:
+  1. mosaic init     Connect a repo + GitHub PAT (.env)
+  2. mosaic scrape   Fetch all PRs and labeled comments into mosaic.db
+  3. mosaic build    Configure embeddings and build the Chroma vector DB
+
+Commands:
+  init     Connect a GitHub repository (URL + PAT → .env, create DB tables)
+  scrape   Paginate all PRs and comments (review, issue, review summaries)
+  build    Choose local (fastembed) or API embeddings, then index into Chroma
+  help     Show this overview
+
+Tips:
+  • API-only install:  pip install -e .
+  • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
+  • Secrets live in .env; vector store / config under .mosaic/ (gitignored)
+  • Per-command flags:  mosaic <command> --help
+""".strip()
+    )
+
+
 @app.command("init")
 def init_cmd(
     repo: Optional[str] = typer.Option(
