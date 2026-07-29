@@ -62,6 +62,8 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Added
 
 - `mosaic sync` — fetch PRs not yet in SQLite, delta-vectorize, update `.mosaic/sync_state.json`.
