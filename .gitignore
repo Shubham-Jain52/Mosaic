@@ -3,3 +3,8 @@
 
 #env
 .env
+
+#folders
+mosaic.egg-info/
+.mosaic/
+
