@@ -1,0 +1,4 @@
+# Optional on-device embeddings (ONNX via fastembed).
+# Prefer: pip install 'mosaic-cli[local]'  or  pip install -e '.[local]'
+-r requirements.txt
+fastembed==0.7.1

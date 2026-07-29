@@ -1,0 +1,1 @@
+"""Mosaic command-line interface."""

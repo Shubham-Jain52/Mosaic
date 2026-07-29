@@ -1,0 +1,7 @@
+ai
+api
+automation
+cli
+core
+pipeline
+scrapers
