@@ -165,6 +165,71 @@ def fetch_PR_comments(pr_number: int, owner: str, repo: str) -> List[Comment_Str
     return fetch_all_pr_comments(pr_number, owner, repo)
 
 
+def list_pull_request_numbers(
+    owner: Optional[str] = None,
+    repo: Optional[str] = None,
+) -> List[int]:
+    """Paginate GitHub PR list and return only PR numbers (newest pages included)."""
+    if owner is None or repo is None:
+        configured_owner, configured_repo = get_repo()
+        owner = owner or configured_owner
+        repo = repo or configured_repo
+
+    page = 1
+    numbers: List[int] = []
+    while True:
+        url = (
+            f"https://api.github.com/repos/{owner}/{repo}/pulls"
+            f"?state=all&per_page=100&page={page}"
+        )
+        response = _request(url)
+        if response.status_code != 200:
+            raise GitHubAPIError(
+                f"Error listing PRs: HTTP {response.status_code} — {response.text[:200]}"
+            )
+        prs = response.json()
+        if not prs:
+            break
+        for pr_data in prs:
+            number = pr_data.get("number")
+            if number is not None:
+                numbers.append(int(number))
+        if len(prs) < 100:
+            break
+        page += 1
+    return numbers
+
+
+def fetch_pull_request(
+    pr_number: int,
+    owner: Optional[str] = None,
+    repo: Optional[str] = None,
+) -> PR_Structure:
+    """Fetch a single PR (metadata + all labeled comment kinds)."""
+    if owner is None or repo is None:
+        configured_owner, configured_repo = get_repo()
+        owner = owner or configured_owner
+        repo = repo or configured_repo
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    response = _request(url)
+    if response.status_code == 404:
+        raise GitHubAPIError(f"PR #{pr_number} was not found.")
+    if response.status_code != 200:
+        raise GitHubAPIError(
+            f"Error fetching PR #{pr_number}: HTTP {response.status_code} — "
+            f"{response.text[:200]}"
+        )
+    pr_data = response.json()
+    return PR_Structure(
+        number=pr_data.get("number"),
+        title=pr_data.get("title"),
+        state=pr_data.get("state"),
+        description=pr_data.get("body"),
+        comments=fetch_all_pr_comments(pr_number, owner, repo),
+    )
+
+
 def fetch_pull_requests(
     owner: Optional[str] = None,
     repo: Optional[str] = None,

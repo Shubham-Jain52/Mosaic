@@ -43,6 +43,16 @@ def get_all_prs() -> List[Dict]:
         db.close()
 
 
+def get_pr_numbers() -> List[int]:
+    """Return all PR numbers currently stored in SQLite."""
+    db = session_local()
+    try:
+        rows = db.query(PULL_REQUEST.number).order_by(PULL_REQUEST.number).all()
+        return [int(row[0]) for row in rows]
+    finally:
+        db.close()
+
+
 def get_all_comments(comment_type: Optional[str] = None) -> List[Dict]:
     db = session_local()
     try:
@@ -92,14 +102,22 @@ def count_comments_by_type() -> Dict[str, int]:
         db.close()
 
 
-def get_comment_corpus(comment_type: Optional[str] = None) -> List[Dict]:
+def get_comment_corpus(
+    comment_type: Optional[str] = None,
+    comment_ids: Optional[List[str]] = None,
+) -> List[Dict]:
     """
     Flat corpus entries shaped for embedding later.
 
     Each item has a composite id (`{type}:{id}`), metadata, and a `text` blob.
+    If comment_ids is provided, only those composite ids are returned.
     """
+    wanted = set(comment_ids) if comment_ids is not None else None
     corpus: List[Dict] = []
     for comment in get_all_comments(comment_type=comment_type):
+        cid = f"{comment['comment_type']}:{comment['comment_id']}"
+        if wanted is not None and cid not in wanted:
+            continue
         parts = [f"Type: {comment['comment_type']}"]
         if comment.get("review_state"):
             parts.append(f"Review state: {comment['review_state']}")
@@ -114,7 +132,7 @@ def get_comment_corpus(comment_type: Optional[str] = None) -> List[Dict]:
             continue
         corpus.append(
             {
-                "id": f"{comment['comment_type']}:{comment['comment_id']}",
+                "id": cid,
                 "comment_type": comment["comment_type"],
                 "pr_number": comment["pr_number"],
                 "file_path": comment["file_path"],
@@ -125,3 +143,13 @@ def get_comment_corpus(comment_type: Optional[str] = None) -> List[Dict]:
             }
         )
     return corpus
+
+
+def comment_ids_for_prs(pr_numbers: List[int]) -> List[str]:
+    """Composite corpus ids for comments belonging to the given PR numbers."""
+    wanted = set(pr_numbers)
+    ids: List[str] = []
+    for comment in get_all_comments():
+        if comment["pr_number"] in wanted:
+            ids.append(f"{comment['comment_type']}:{comment['comment_id']}")
+    return ids

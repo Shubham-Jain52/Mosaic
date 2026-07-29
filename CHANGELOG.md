@@ -64,4 +64,16 @@ Commits: `93812c0`.
 
 ### Added
 
+- `mosaic sync` — fetch PRs not yet in SQLite, delta-vectorize, update `.mosaic/sync_state.json`.
+- Sync state bookmarks: known PR numbers, indexed comment IDs, `last_synced_at` / `last_full_build_at`.
+
+### Changed
+
+- `mosaic build` now performs full scrape + embedder setup + full vector index (replaces separate `scrape` + `build`).
+- Removed the `scrape` CLI command (library scrape helpers remain for build/sync).
+
+## [0.1.1] - 2026-07-29
+
+### Added
+
 - `mosaic help` — overview of Mosaic and available commands.

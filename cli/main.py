@@ -1,9 +1,9 @@
-"""Mosaic CLI — init, scrape, and build the vector index."""
+"""Mosaic CLI — init, build (ingest + index), and sync."""
 
 from __future__ import annotations
 
 import getpass
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Set
 
 import typer
 
@@ -19,14 +19,31 @@ from core.config import (
     DEFAULT_OPENAI_EMBEDDING_MODEL,
     EmbeddingSettings,
     ensure_mosaic_dirs,
+    get_embedding_settings,
+    get_repo,
     parse_repo_url,
     persist_embedding_settings,
     write_env,
 )
 from core.database import init_db, save_data_to_db
-from core.repository import count_comments_by_type, get_comment_corpus
-from pipeline.indexer import build_vector_index
-from scrapers.github import GitHubAPIError, fetch_pull_requests
+from core.repository import (
+    comment_ids_for_prs,
+    count_comments_by_type,
+    get_comment_corpus,
+    get_pr_numbers,
+)
+from core.sync_state import (
+    read_sync_state,
+    record_full_build,
+    record_sync_delta,
+)
+from pipeline.indexer import build_vector_index, index_corpus_delta
+from scrapers.github import (
+    GitHubAPIError,
+    fetch_pull_request,
+    fetch_pull_requests,
+    list_pull_request_numbers,
+)
 
 app = typer.Typer(
     name="mosaic",
@@ -47,19 +64,21 @@ comments into SQLite, then builds a vector index for RAG over that feedback.
 
 Typical flow:
   1. mosaic init     Connect a repo + GitHub PAT (.env)
-  2. mosaic scrape   Fetch all PRs and labeled comments into mosaic.db
-  3. mosaic build    Configure embeddings and build the Chroma vector DB
+  2. mosaic build    Full scrape + configure embeddings + vector index
+  3. mosaic sync     Fetch only new PRs and vectorize the delta (optional)
+  4. mosaic ask      (coming later) Query the index
 
 Commands:
   init     Connect a GitHub repository (URL + PAT → .env, create DB tables)
-  scrape   Paginate all PRs and comments (review, issue, review summaries)
-  build    Choose local (fastembed) or API embeddings, then index into Chroma
+  build    Full ingest + embedder setup + Chroma index (first-time pipeline)
+  sync     Delta: PRs not yet in SQLite → save → vectorize → ready
   help     Show this overview
 
-Tips:
+Notes:
+  • V1 sync only picks up new PR numbers (not new comments on existing PRs).
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
-  • Secrets live in .env; vector store / config under .mosaic/ (gitignored)
+  • Secrets in .env; Chroma + sync state under .mosaic/ (gitignored)
   • Per-command flags:  mosaic <command> --help
 """.strip()
     )
@@ -117,35 +136,9 @@ def init_cmd(
     typer.echo("\nDatabase tables are ready (mosaic.db).")
     typer.echo(
         "Tip: if mosaic.db still has old test rows, delete it and re-run "
-        "`mosaic init` before the first real scrape."
+        "`mosaic init` before the first real build."
     )
-    typer.echo("\nNext: run `mosaic scrape` to fetch all PRs and review comments.")
-
-
-@app.command("scrape")
-def scrape_cmd() -> None:
-    """Fetch all PRs + review comments for the connected repo and save to SQLite."""
-    init_db()
-    try:
-        pull_requests = fetch_pull_requests()
-    except (RuntimeError, GitHubAPIError) as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1) from exc
-
-    save_data_to_db(pull_requests)
-    total_comments = sum(len(pr.comments) for pr in pull_requests)
-    by_type: Dict[str, int] = {}
-    for pr in pull_requests:
-        for comment in pr.comments:
-            by_type[comment.comment_type] = by_type.get(comment.comment_type, 0) + 1
-
-    typer.secho(
-        f"Saved {len(pull_requests)} PRs and {total_comments} comments to mosaic.db",
-        fg=typer.colors.GREEN,
-    )
-    if by_type:
-        for label, count in sorted(by_type.items()):
-            typer.echo(f"  {label}: {count}")
+    typer.echo("\nNext: run `mosaic build` to scrape, configure embeddings, and index.")
 
 
 def _prompt_backend() -> str:
@@ -264,45 +257,80 @@ def _configure_api() -> EmbeddingSettings:
     )
 
 
+def _require_repo_config() -> None:
+    try:
+        get_repo()
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _print_comment_breakdown(by_type: Dict[str, int]) -> None:
+    for label, count in sorted(by_type.items()):
+        typer.echo(f"  {label}: {count}")
+
+
 @app.command("build")
 def build_cmd() -> None:
-    """Configure embeddings and build the Chroma vector DB from scraped comments."""
+    """Full scrape + configure embeddings + build the Chroma vector index."""
     init_db()
     ensure_mosaic_dirs()
+    _require_repo_config()
 
-    counts = count_comments_by_type()
-    corpus = get_comment_corpus()
-    if not corpus:
-        typer.secho(
-            "No comments in mosaic.db. Run `mosaic scrape` first.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    typer.echo("Mosaic build — embedding + vector index\n")
-    typer.echo(f"Corpus ready: {len(corpus)} documents")
-    if counts:
-        for label, count in sorted(counts.items()):
-            typer.echo(f"  {label}: {count}")
-    typer.echo("")
+    typer.echo("Mosaic build — scrape + embeddings + vector index\n")
 
     backend = _prompt_backend()
     if backend == "local":
         settings = _configure_local()
     else:
         settings = _configure_api()
-
     persist_embedding_settings(settings)
     typer.echo("\nSaved embedding settings to .env and .mosaic/config.json")
-    typer.echo("Building Chroma vector index …")
 
+    typer.echo("\nFetching all pull requests and comments from GitHub …")
+    try:
+        pull_requests = fetch_pull_requests()
+    except (RuntimeError, GitHubAPIError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    save_data_to_db(pull_requests)
+    total_comments = sum(len(pr.comments) for pr in pull_requests)
+    by_type: Dict[str, int] = {}
+    for pr in pull_requests:
+        for comment in pr.comments:
+            by_type[comment.comment_type] = by_type.get(comment.comment_type, 0) + 1
+
+    typer.secho(
+        f"Saved {len(pull_requests)} PRs and {total_comments} comments to mosaic.db",
+        fg=typer.colors.GREEN,
+    )
+    if by_type:
+        _print_comment_breakdown(by_type)
+
+    corpus = get_comment_corpus()
+    if not corpus:
+        typer.secho(
+            "Ingestion finished but there are no comments to vectorize. "
+            "The connected repo may have no review/conversation comments yet.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"\nBuilding Chroma vector index ({len(corpus)} documents) …")
     try:
         embedder = get_embedder(settings)
         result = build_vector_index(embedder=embedder, settings=settings, reset=True)
     except Exception as exc:  # noqa: BLE001
         typer.secho(f"Index build failed: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
+
+    record_full_build(
+        pr_numbers=get_pr_numbers(),
+        comment_ids=result["comment_ids"],
+        embedding_model=settings.model,
+    )
 
     typer.secho("\nVector DB ready.", fg=typer.colors.GREEN)
     typer.echo(f"  backend    = {result['backend']}")
@@ -311,6 +339,101 @@ def build_cmd() -> None:
     typer.echo(f"  documents  = {result['documents']}")
     typer.echo(f"  collection = {result['collection']}")
     typer.echo(f"  chroma     = {result['chroma_path']}")
+    typer.secho("\nMosaic is ready for your questions.", fg=typer.colors.GREEN)
+    typer.echo("Later: run `mosaic sync` to pull only new PRs, then ask (coming soon).")
+
+
+@app.command("sync")
+def sync_cmd() -> None:
+    """Fetch PRs not yet in SQLite, vectorize their comments, update sync state."""
+    init_db()
+    ensure_mosaic_dirs()
+    _require_repo_config()
+
+    try:
+        settings = get_embedding_settings()
+    except RuntimeError as exc:
+        typer.secho(
+            f"{exc}\nRun `mosaic build` first to configure embeddings and create the index.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    state = read_sync_state()
+    existing: Set[int] = state.known_pr_set() | set(get_pr_numbers())
+
+    typer.echo("Mosaic sync — checking GitHub for PRs not yet in mosaic.db …")
+    try:
+        remote_numbers = set(list_pull_request_numbers())
+    except (RuntimeError, GitHubAPIError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    missing: List[int] = sorted(remote_numbers - existing)
+    if not missing:
+        typer.secho("Everything up to date.", fg=typer.colors.GREEN)
+        if state.last_synced_at:
+            typer.echo(f"  last_synced_at = {state.last_synced_at}")
+        typer.echo("Mosaic is ready for your questions.")
+        return
+
+    typer.echo(f"Found {len(missing)} new PR(s): {missing[:20]}{'…' if len(missing) > 20 else ''}")
+    owner, repo = get_repo()
+    fetched = []
+    for number in missing:
+        typer.echo(f"  Fetching PR #{number} …")
+        try:
+            fetched.append(fetch_pull_request(number, owner, repo))
+        except GitHubAPIError as exc:
+            typer.secho(f"  Skipping PR #{number}: {exc}", fg=typer.colors.YELLOW)
+
+    if not fetched:
+        typer.secho("No PRs could be fetched.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    save_data_to_db(fetched)
+    new_pr_numbers = [pr.number for pr in fetched]
+    new_comment_ids = comment_ids_for_prs(new_pr_numbers)
+    total_comments = sum(len(pr.comments) for pr in fetched)
+    typer.secho(
+        f"Saved {len(fetched)} PRs and {total_comments} comments to mosaic.db",
+        fg=typer.colors.GREEN,
+    )
+
+    if not new_comment_ids:
+        record_sync_delta(
+            new_pr_numbers=new_pr_numbers,
+            new_comment_ids=[],
+            embedding_model=settings.model,
+        )
+        typer.echo("New PRs had no indexable comments; sync state updated.")
+        typer.secho("Mosaic is ready for your questions.", fg=typer.colors.GREEN)
+        return
+
+    typer.echo(f"Vectorizing {len(new_comment_ids)} new comment(s) …")
+    try:
+        embedder = get_embedder(settings)
+        result = index_corpus_delta(
+            new_comment_ids,
+            embedder=embedder,
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        typer.secho(f"Delta index failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    record_sync_delta(
+        new_pr_numbers=new_pr_numbers,
+        new_comment_ids=result["comment_ids"],
+        embedding_model=settings.model,
+    )
+
+    typer.secho(
+        f"Indexed {result['documents']} new document(s) into {result['collection']}.",
+        fg=typer.colors.GREEN,
+    )
+    typer.secho("Mosaic is ready for your questions.", fg=typer.colors.GREEN)
 
 
 def main() -> None:
