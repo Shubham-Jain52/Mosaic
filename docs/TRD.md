@@ -112,8 +112,8 @@ On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including re
 | Command | Behavior |
 |---------|----------|
 | `mosaic init` | Prompt (or `--repo` / `--token`), write `.env`, `init_db()` |
-| `mosaic scrape` | Full paginated fetch → `save_data_to_db` → print counts |
-| `mosaic build` | Choose local/API embedder, verify, persist config, build Chroma index |
+| `mosaic build` | Embedder setup + full scrape + full Chroma index + sync state |
+| `mosaic sync` | PRs not in SQLite → delta scrape + delta vectorize + update sync state |
 
 ## Embedding + vector index
 
@@ -122,6 +122,7 @@ On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including re
 | Local model | Optional `fastembed` (ONNX) via `mosaic-cli[local]`; default `BAAI/bge-small-en-v1.5`; cache is user/HF cache, not project tree |
 | API providers | `openai`, `huggingface`, `openai_compatible` (custom base URL) |
 | Config | `.env` (`EMBEDDING_*`, keys) + `.mosaic/config.json` |
+| Sync state | `.mosaic/sync_state.json` (known PRs, indexed ids, `last_synced_at`) |
 | Vector store | Chroma persistent client at `.mosaic/chroma/`, collection `mosaic_comments` |
 | Document unit | One `get_comment_corpus()` entry → one vector (no extra chunking yet) |
 
@@ -135,8 +136,8 @@ source .venv/bin/activate
 pip install -e .                 # API-only (lightweight)
 # pip install -e '.[local]'      # optional on-device fastembed
 mosaic init
-mosaic scrape
 mosaic build
+mosaic sync
 ```
 
 Base install does **not** pull PyTorch/`sentence-transformers`. Local path needs `pip install 'mosaic-cli[local]'` (or `-e '.[local]'`).
