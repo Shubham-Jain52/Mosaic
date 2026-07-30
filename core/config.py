@@ -18,6 +18,11 @@ MOSAIC_DIR = Path(".mosaic")
 CHROMA_DIR = MOSAIC_DIR / "chroma"
 MOSAIC_CONFIG_PATH = MOSAIC_DIR / "config.json"
 
+# User-global Mosaic home (token shared across projects)
+GLOBAL_MOSAIC_DIR = Path.home() / ".mosaic"
+GLOBAL_ENV_PATH = GLOBAL_MOSAIC_DIR / ".env"
+GLOBAL_TOKEN_KEY = "MOSAIC_GITHUB_TOKEN"
+
 # fastembed-supported default (ONNX); override at `mosaic build` prompt.
 DEFAULT_LOCAL_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -26,14 +31,68 @@ DEFAULT_COLLECTION_NAME = "mosaic_comments"
 _REPO_SHORTHAND = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/?$")
 
 
+def ensure_global_mosaic_dir() -> None:
+    """Create ~/.mosaic/ if missing."""
+    GLOBAL_MOSAIC_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def load_config() -> None:
-    """Load variables from .env into the process environment."""
+    """
+    Load env vars for Mosaic.
+
+    Order (dotenv does not override already-set process env):
+      1. ~/.mosaic/.env  (global — e.g. MOSAIC_GITHUB_TOKEN)
+      2. ./.env          (per-project)
+    """
+    load_dotenv(GLOBAL_ENV_PATH)
     load_dotenv(ENV_PATH)
 
 
 def ensure_mosaic_dirs() -> None:
     """Create .mosaic/ and chroma/ directories if missing."""
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_global_github_token() -> Optional[str]:
+    """Return MOSAIC_GITHUB_TOKEN from process env or ~/.mosaic/.env, if set."""
+    load_dotenv(GLOBAL_ENV_PATH)
+    token = (os.getenv(GLOBAL_TOKEN_KEY) or "").strip()
+    return token or None
+
+
+def save_global_github_token(token: str) -> Path:
+    """Persist MOSAIC_GITHUB_TOKEN to ~/.mosaic/.env. Returns the path written."""
+    ensure_global_mosaic_dir()
+    cleaned = (token or "").strip()
+    if not cleaned:
+        raise ValueError("GitHub token cannot be empty.")
+    update_env({GLOBAL_TOKEN_KEY: cleaned}, env_path=GLOBAL_ENV_PATH)
+    os.environ[GLOBAL_TOKEN_KEY] = cleaned
+    return GLOBAL_ENV_PATH
+
+
+def write_project_env(
+    *,
+    repo_owner: str,
+    repo_name: str,
+    repo_url: str,
+    github_token: Optional[str] = None,
+    env_path: Path = ENV_PATH,
+) -> None:
+    """
+    Create or update per-project .env with repo identity.
+
+    Writes GITHUB_TOKEN only when ``github_token`` is provided (legacy /
+    no-global-token path). Prefer a global MOSAIC_GITHUB_TOKEN instead.
+    """
+    values: Dict[str, str] = {
+        "REPO_OWNER": repo_owner.strip(),
+        "REPO_NAME": repo_name.strip(),
+        "REPO_URL": repo_url.strip(),
+    }
+    if github_token is not None and str(github_token).strip():
+        values["GITHUB_TOKEN"] = str(github_token).strip()
+    update_env(values, env_path=env_path)
 
 
 def parse_repo_url(url: str) -> Tuple[str, str]:
@@ -77,11 +136,20 @@ def parse_repo_url(url: str) -> Tuple[str, str]:
 
 
 def get_github_token() -> str:
+    """
+    Resolve GitHub PAT for API calls.
+
+    Preference: MOSAIC_GITHUB_TOKEN (global / process) → GITHUB_TOKEN (project .env).
+    """
     load_config()
-    token = (os.getenv("GITHUB_TOKEN") or "").strip()
+    token = (
+        (os.getenv(GLOBAL_TOKEN_KEY) or "").strip()
+        or (os.getenv("GITHUB_TOKEN") or "").strip()
+    )
     if not token:
         raise RuntimeError(
-            "GITHUB_TOKEN is not set. Run `mosaic init` to configure your Personal Access Token."
+            "No GitHub token found. Run `mosaic init` (saves MOSAIC_GITHUB_TOKEN "
+            f"to {GLOBAL_ENV_PATH}) or set GITHUB_TOKEN in the project .env."
         )
     return token
 
@@ -133,14 +201,12 @@ def write_env(
     repo_url: str,
     env_path: Path = ENV_PATH,
 ) -> None:
-    """Create or update .env with Mosaic connection settings."""
-    update_env(
-        {
-            "GITHUB_TOKEN": github_token.strip(),
-            "REPO_OWNER": repo_owner.strip(),
-            "REPO_NAME": repo_name.strip(),
-            "REPO_URL": repo_url.strip(),
-        },
+    """Create or update .env with Mosaic connection settings (legacy helper)."""
+    write_project_env(
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        repo_url=repo_url,
+        github_token=github_token,
         env_path=env_path,
     )
 

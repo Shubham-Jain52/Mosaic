@@ -67,7 +67,8 @@ Config is **per project** (not a global `~/.mosaic/config.toml`) so multi-repo u
 
 | Key | Purpose |
 |-----|---------|
-| `GITHUB_TOKEN` | User PAT (Bearer auth) |
+| `GITHUB_TOKEN` | Optional per-project PAT (legacy / override) |
+| `MOSAIC_GITHUB_TOKEN` | Preferred global PAT in `~/.mosaic/.env` |
 | `REPO_OWNER` | GitHub owner/org |
 | `REPO_NAME` | Repository name |
 | `REPO_URL` | Canonical `https://github.com/owner/repo` |

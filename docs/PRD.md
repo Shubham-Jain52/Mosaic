@@ -56,7 +56,8 @@ Config moved to **per-project** files (not a global `~/.mosaic/config.toml`) so 
 
 | Location | Contents |
 |----------|----------|
-| `.env` | Secrets and connection: `GITHUB_TOKEN`, `REPO_*`, embedding keys / backend settings; (v1.0.0) chat/BYOK keys for `check` |
+| `.env` | Per-project: `REPO_*`, embedding keys / backend settings; chat/BYOK keys for `check`; optional project `GITHUB_TOKEN` |
+| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN` (classic PAT shared across projects) |
 | `.mosaic/config.json` | Non-secret build metadata (embedding model, chroma path, collection, …) |
 | `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at`, `last_full_build_at` |
 | `.mosaic/chroma/` | Persistent vector index |
@@ -74,7 +75,7 @@ mosaic init
 
 1. Prompt for GitHub repo URL (`https://github.com/owner/repo` or `owner/repo`).
 2. Prompt for GitHub PAT (hidden input).
-3. Write `GITHUB_TOKEN`, `REPO_OWNER`, `REPO_NAME`, `REPO_URL` to `.env`.
+3. Resolve GitHub PAT: use global `MOSAIC_GITHUB_TOKEN` if set; otherwise prompt once and offer to save to `~/.mosaic/.env`. Write `REPO_OWNER`, `REPO_NAME`, `REPO_URL` to project `.env` (token only if not using global).
 4. Create SQLite schema in `mosaic.db`.
 5. Instruct user to run `mosaic build`.
 

@@ -62,6 +62,17 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-30
+
+### Added
+
+- Global GitHub PAT: `MOSAIC_GITHUB_TOKEN` in `~/.mosaic/.env` (prompted once on `mosaic init`, reused across projects).
+- Per-project `.env` stores `REPO_*` without requiring a local `GITHUB_TOKEN` when the global token is set.
+
+### Changed
+
+- `get_github_token()` resolves `MOSAIC_GITHUB_TOKEN` first, then project `GITHUB_TOKEN` (backward compatible).
+
 ## [0.3.0] - 2026-07-30
 
 ### Added

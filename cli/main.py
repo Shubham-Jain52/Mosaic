@@ -20,12 +20,15 @@ from core.config import (
     DEFAULT_LOCAL_MODEL,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
     EmbeddingSettings,
+    GLOBAL_ENV_PATH,
     ensure_mosaic_dirs,
     get_embedding_settings,
+    get_global_github_token,
     get_repo,
     parse_repo_url,
     persist_embedding_settings,
-    write_env,
+    save_global_github_token,
+    write_project_env,
 )
 from core.database import init_db, save_data_to_db
 from core.git_diff import GitDiffError, get_working_diff, resolve_diff_base
@@ -73,7 +76,7 @@ Typical flow:
   4. mosaic check    Advisory review of your changes vs main (BYOK chat)
 
 Commands:
-  init     Connect a GitHub repository (URL + PAT → .env, create DB tables)
+  init     Connect a GitHub repository (URL → .env; PAT saved globally once)
   build    Full ingest + embedder setup + Chroma index (first-time pipeline)
   sync     Delta: PRs not yet in SQLite → save → vectorize → ready
   check    Diff vs main (auto) → graded, cited feedback from past reviews
@@ -81,10 +84,11 @@ Commands:
 
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
+  • GitHub PAT is stored once in ~/.mosaic/.env (MOSAIC_GITHUB_TOKEN).
   • check needs CHAT_API_KEY (or OPENAI_API_KEY); pipe/stdin optional.
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
-  • Secrets in .env; Chroma + sync state under .mosaic/ (gitignored)
+  • Project .env holds REPO_*; Chroma + sync state under .mosaic/ (gitignored)
   • Per-command flags:  mosaic <command> --help
 """.strip()
     )
@@ -102,10 +106,10 @@ def init_cmd(
         None,
         "--token",
         "-t",
-        help="GitHub Personal Access Token. Prompted securely if omitted.",
+        help="GitHub Personal Access Token. Uses global token if set; else prompted.",
     ),
 ) -> None:
-    """Connect a repository: save URL + PAT to .env and create the local DB."""
+    """Connect a repository: save URL to .env and create the local DB."""
     typer.echo("Mosaic init — connect a GitHub repository\n")
 
     raw_repo = repo
@@ -120,17 +124,63 @@ def init_cmd(
 
     repo_url = f"https://github.com/{owner}/{name}"
 
-    pat = token
-    while not pat:
-        pat = getpass.getpass("GitHub Personal Access Token (input hidden): ").strip()
-        if not pat:
-            typer.echo("Token cannot be empty.")
+    global_token = get_global_github_token()
+    project_token: Optional[str] = None
+    token_source = "global"
 
-    write_env(
-        github_token=pat,
+    if token:
+        pat = token.strip()
+        if not pat:
+            typer.secho("Token cannot be empty.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        if not global_token:
+            if typer.confirm(
+                f"Save this token to {GLOBAL_ENV_PATH} for all Mosaic projects?",
+                default=True,
+            ):
+                save_global_github_token(pat)
+                typer.echo(f"Saved MOSAIC_GITHUB_TOKEN to {GLOBAL_ENV_PATH}")
+                token_source = "global"
+            else:
+                project_token = pat
+                token_source = "project"
+        else:
+            # Explicit --token while global exists: keep using global unless they
+            # want this project-only override.
+            if typer.confirm(
+                "A global Mosaic GitHub token already exists. "
+                "Use the token you just passed for this project only?",
+                default=False,
+            ):
+                project_token = pat
+                token_source = "project"
+            else:
+                token_source = "global"
+    elif global_token:
+        typer.echo(f"Using GitHub token from {GLOBAL_ENV_PATH} (MOSAIC_GITHUB_TOKEN)")
+        token_source = "global"
+    else:
+        pat = ""
+        while not pat:
+            pat = getpass.getpass("GitHub Personal Access Token (input hidden): ").strip()
+            if not pat:
+                typer.echo("Token cannot be empty.")
+        if typer.confirm(
+            f"Save this token to {GLOBAL_ENV_PATH} for all Mosaic projects?",
+            default=True,
+        ):
+            save_global_github_token(pat)
+            typer.echo(f"Saved MOSAIC_GITHUB_TOKEN to {GLOBAL_ENV_PATH}")
+            token_source = "global"
+        else:
+            project_token = pat
+            token_source = "project"
+
+    write_project_env(
         repo_owner=owner,
         repo_name=name,
         repo_url=repo_url,
+        github_token=project_token,
     )
     init_db()
 
@@ -138,7 +188,10 @@ def init_cmd(
     typer.echo(f"  REPO_URL    = {repo_url}")
     typer.echo(f"  REPO_OWNER  = {owner}")
     typer.echo(f"  REPO_NAME   = {name}")
-    typer.echo("  GITHUB_TOKEN = ***")
+    if token_source == "global":
+        typer.echo(f"  GitHub token = *** (global: {GLOBAL_ENV_PATH})")
+    else:
+        typer.echo("  GITHUB_TOKEN = *** (project .env)")
     typer.echo("\nDatabase tables are ready (mosaic.db).")
     typer.echo(
         "Tip: if mosaic.db still has old test rows, delete it and re-run "
