@@ -228,7 +228,7 @@ BaseAnalyzer (ABC):
 - **No local chat LLM in v1.0.0.**
 - Log an approximate LLM **call count** when `check` runs (cost visibility).
 
-**0.4.0 chat setup UX (after engine is trusted):** guided config — **provider → model list → API key** (CLI prompts first; same flow in TUI dropdowns later). Presets map providers (OpenAI, Groq, Gemini, openai_compatible) to base URLs / default model catalogs; custom base URL only for compatible. Persist `CHAT_PROVIDER` / `CHAT_MODEL` / `CHAT_API_KEY` / optional `CHAT_API_BASE` in `.env`. Check engine (0.3.0) uses raw env vars until this lands.
+**0.4.0 `mosaic settings` (shipped):** guided BYOK — **provider → sample model list → API key** via CLI (`mosaic settings` anytime; same prompts on first `mosaic check` if missing). Presets: OpenAI, Groq, OpenRouter, custom OpenAI-compatible URL. Persist `CHAT_PROVIDER` / `CHAT_MODEL` / `CHAT_API_KEY` / `CHAT_API_BASE` (empty base clears stale values). Embedding reconfigure remains `mosaic build` only. Full TUI shell is post-1.0.0.
 
 ### Diff parsing
 
@@ -286,8 +286,6 @@ Cheap checks: pipe empty stdin / noop diff; run two real diffs and compare citat
 
 ## Implemented so far / next technical phase
 
-**Done (foundation + 0.3.0):** per-project config (`.env` + `.mosaic/`), CLI `init` / `build` / `sync` / `help` / `check`, full pagination, labeled comments, SQLite upsert, repository read helpers, sync state + delta sync, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma full + delta index, check runner (diff parse, git auto-diff, retrieval, BYOK OpenAI-compatible analyzer).
-
-**Next (0.4.0):** chat provider → model list → API key setup UX (CLI/TUI).
+**Done (foundation + 0.3.x + 0.4.0):** per-project config (`.env` + `.mosaic/`), CLI `init` / `build` / `sync` / `help` / `check` / `settings`, full pagination, labeled comments, SQLite upsert, repository read helpers, sync state + delta sync, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma full + delta index, check runner (diff parse, git auto-diff, retrieval, BYOK OpenAI-compatible analyzer), chat provider aliases + sample models + `mosaic settings` reconfigure.
 
 **After:** [ROADMAP.md](ROADMAP.md) — `ask`, `describe`, hard gate, local chat LLM, fuller TUI, PyPI, sync gaps, etc.

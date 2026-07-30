@@ -209,12 +209,23 @@ def peek_chat_settings() -> Optional[ChatSettings]:
     return ChatSettings(api_key=api_key, model=model, api_base=api_base)
 
 
+def mask_api_key(api_key: str) -> str:
+    """Return a display-safe masked key (never the full secret)."""
+    text = (api_key or "").strip()
+    if not text:
+        return "(not set)"
+    if len(text) <= 8:
+        return "***"
+    return f"{text[:4]}…{text[-4:]}"
+
+
 def get_chat_settings() -> ChatSettings:
     settings = peek_chat_settings()
     if settings is None:
         raise ChatError(
-            "Chat API key is missing. Run `mosaic check` to enter one, or set "
-            "CHAT_API_KEY (or OPENAI_API_KEY) in ~/.mosaic/.env or project .env. "
+            "Chat API key is missing. Run `mosaic settings` or `mosaic check` "
+            "to enter one, or set CHAT_API_KEY (or OPENAI_API_KEY) in "
+            "~/.mosaic/.env or project .env. "
             "Local embeddings do not cover the LLM step."
         )
     return settings

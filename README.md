@@ -59,13 +59,15 @@ mosaic init                  # prompt for repo URL + PAT → .env, create tables
 mosaic build                 # full scrape + embeddings + Chroma index
 mosaic sync                  # later: only new PRs + delta vectors
 
-# Chat for check (prompted on first `mosaic check` if missing — any OpenAI-compatible provider):
+# Chat for check (prompted on first `mosaic check` if missing; change anytime with `mosaic settings`):
 # CHAT_API_KEY=...                  # OpenAI, Groq, OpenRouter, … (also ~/.mosaic/.env)
 # CHAT_MODEL=gpt-4o-mini            # or e.g. openai/gpt-oss-20b for Groq
-# CHAT_API_BASE=...                 # blank = OpenAI; or set via provider alias on first check
+# CHAT_API_BASE=...                 # blank = OpenAI; or set via provider alias
+# CHAT_PROVIDER=openai              # optional label written by settings / check setup
 
 mosaic check                 # auto git diff vs main/master
 # git diff main | mosaic check --stdin
+mosaic settings              # view / change chat LLM provider settings
 ```
 
 For a fresh real build after test data, delete `mosaic.db` (and optionally `.mosaic/`) then re-run `init` + `build`.
@@ -79,6 +81,7 @@ For a fresh real build after test data, delete `mosaic.db` (and optionally `.mos
 | `mosaic build` | Full ingest + configure embeddings + build Chroma index |
 | `mosaic sync` | Delta: PRs missing from DB → save → vectorize → ready |
 | `mosaic check` | Advisory cited feedback from changes vs main (BYOK chat) |
+| `mosaic settings` | View / change chat LLM provider settings (key, base, model) |
 
 Use `mosaic <command> --help` for flags on a specific command.
 
@@ -102,8 +105,8 @@ Per-project (not a global `~/.mosaic/` profile):
 
 | Location | Contents |
 |----------|----------|
-| `.env` | `REPO_*`, embedding keys / backend; optional project `GITHUB_TOKEN`; optional project `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` |
-| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN`; optional global `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` (shared across projects) |
+| `.env` | `REPO_*`, embedding keys / backend; optional project `GITHUB_TOKEN`; optional project `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` / `CHAT_PROVIDER` |
+| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN`; optional global `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` / `CHAT_PROVIDER` (shared across projects) |
 | `.mosaic/config.json` | Non-secret build metadata (model name, chroma path, …) |
 | `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at` |
 | `.mosaic/chroma/` | Persistent vector index |
@@ -128,5 +131,5 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 | **0.3.3** | Shipped: `mosaic check` prompts + verifies chat API key (global `~/.mosaic/.env` by default) |
 | **0.3.4** | Shipped: chat prompt is OpenAI-compatible BYOK (base URL examples + Groq-aware model default) |
 | **0.3.5** | Shipped: provider aliases + sample models + credential-setup logging for `mosaic check` |
-| **0.4.0** | Planned: fuller chat provider → model list → API key TUI |
+| **0.4.0** | Shipped: **`mosaic settings`** — view/change chat LLM settings anytime (embeddings stay via `build`) |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |
