@@ -7,8 +7,8 @@ Versioned product direction. Engine/design detail lives in [PRD.md](PRD.md) and 
 | Phase | Status | What it is |
 |-------|--------|------------|
 | **Foundation** | Shipped | `init`, `build`, `sync` — local SQLite + Chroma corpus; embeddings via API or optional local fastembed |
-| **0.3.0** | Shipped (this release) | **`mosaic check` engine** — auto-diff vs main, retrieve past review comments, graded cited feedback (BYOK chat via `.env`) |
-| **0.4.0** | Next | Chat setup UX — provider → model list/dropdown → API key (CLI prompts / TUI); presets for OpenAI, Groq, Gemini, openai_compatible |
+| **0.3.0** | Shipped | **`mosaic check` engine** — auto-diff vs main, retrieve past review comments, graded cited feedback (BYOK chat via `.env`) |
+| **0.4.0** | Shipped (this release) | **`mosaic settings`** — view/change chat LLM provider settings (provider → sample models → key); first-run aliases shipped in 0.3.5 |
 | **v1.0.0** | Target milestone | Product-complete soft-gate `check` experience (engine + polished BYOK UX); still advisory (no hard gate) |
 | **Post-1.0.0** | Backlog below | Everything else |
 
@@ -19,16 +19,14 @@ Versioned product direction. Engine/design detail lives in [PRD.md](PRD.md) and 
 - Per-hunk Chroma retrieval + OpenAI-compatible chat → BLOCKING / SUGGESTION / NIT with PR citations.
 - Configure chat with `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE`.
 
-## 0.4.0 — chat setup UX (planned)
+## 0.4.0 — `mosaic settings` (shipped)
 
-Guided BYOK so users don’t hand-edit obscure env vars:
+Guided BYOK so users don’t hand-edit obscure env vars — and can **change** chat settings later:
 
-- Select **chat provider** (OpenAI, Groq, Gemini, OpenAI-compatible)
-- Choose a **model from a provider-specific list** (dropdown in TUI / prompted list in CLI)
-- Enter **API key** (stored in `.env`)
-- Optional custom base URL for compatible hosts only
-
-Env vars remain the backing store. Full interactive TUI shell can grow from this surface.
+- **`mosaic settings`** — show masked current chat config; reconfigure provider → sample models → API key; verify; save to `~/.mosaic/.env` (default) or project `.env`
+- Reuses 0.3.5 provider aliases (OpenAI / Groq / OpenRouter / Custom URL) and sample model lists
+- Embedding settings stay out of scope here (change via `mosaic build` + full re-index)
+- Env vars remain the backing store (`CHAT_*`). Full interactive TUI shell remains post-1.0.0
 
 ---
 

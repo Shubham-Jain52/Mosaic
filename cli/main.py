@@ -1,4 +1,4 @@
-"""Mosaic CLI — init, build (ingest + index), sync, and check."""
+"""Mosaic CLI — init, build (ingest + index), sync, check, and settings."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from ai.chat import (
     ResolvedChatProvider,
     default_chat_model_for_provider,
     format_api_base_for_display,
+    mask_api_key,
     peek_chat_settings,
     resolve_chat_provider,
     sample_models_for_provider,
@@ -91,18 +92,21 @@ Typical flow:
   2. mosaic build    Full scrape + configure embeddings + vector index
   3. mosaic sync     Fetch only new PRs and vectorize the delta (optional)
   4. mosaic check    Advisory review of your changes vs main (BYOK chat)
+  5. mosaic settings Change chat/LLM provider settings (key, base, model)
 
 Commands:
-  init     Connect a GitHub repository (URL → .env; PAT saved globally once)
-  build    Full ingest + embedder setup + Chroma index (first-time pipeline)
-  sync     Delta: PRs not yet in SQLite → save → vectorize → ready
-  check    Diff vs main (auto) → graded, cited feedback from past reviews
-  help     Show this overview
+  init       Connect a GitHub repository (URL → .env; PAT saved globally once)
+  build      Full ingest + embedder setup + Chroma index (first-time pipeline)
+  sync       Delta: PRs not yet in SQLite → save → vectorize → ready
+  check      Diff vs main (auto) → graded, cited feedback from past reviews
+  settings   View / change BYOK chat provider settings (LLM only)
+  help       Show this overview
 
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
   • GitHub PAT is stored once in ~/.mosaic/.env (MOSAIC_GITHUB_TOKEN).
   • check prompts for OpenAI-compatible CHAT_API_KEY (+ provider/model) if missing.
+  • settings reconfigures chat anytime; embeddings stay via mosaic build.
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
   • Project .env holds REPO_*; Chroma + sync state under .mosaic/ (gitignored)
@@ -686,25 +690,69 @@ def _prompt_chat_model(
         return model
 
 
-def _ensure_chat_credentials() -> None:
-    """
-    Ensure a chat API key is available for mosaic check.
+def _provider_default_raw(provider: ResolvedChatProvider) -> str:
+    default_raw = {
+        "openai": "1",
+        "groq": "2",
+        "openrouter": "3",
+        "custom": "4",
+    }.get(provider.provider_id, "1")
+    if provider.provider_id == "custom" and provider.api_base:
+        return provider.api_base
+    return default_raw
 
-    If CHAT_API_KEY / OPENAI_API_KEY / EMBEDDING_API_KEY is already set
-    (global ~/.mosaic/.env or project .env), do nothing. Otherwise prompt for
-    an OpenAI-compatible key + provider/base + model, verify with a cheap
-    ping, and offer to save globally by default.
+
+def _echo_current_chat_settings() -> None:
+    """Print masked current chat config (and note embeddings are via build)."""
+    existing = peek_chat_settings()
+    typer.echo("\nChat / LLM settings")
+    typer.echo("-------------------")
+    if existing is None:
+        typer.echo("  (not configured)")
+    else:
+        if existing.api_base:
+            resolved = resolve_chat_provider(existing.api_base)
+        else:
+            resolved = resolve_chat_provider("openai")
+        typer.echo(f"  Provider : {resolved.display_name}")
+        typer.echo(f"  API base : {format_api_base_for_display(existing.api_base)}")
+        typer.echo(f"  Model    : {existing.model}")
+        typer.echo(f"  API key  : {mask_api_key(existing.api_key)}")
+    typer.echo(
+        "\nEmbedding settings are not changed here — re-run `mosaic build` "
+        "to reconfigure (requires full re-index)."
+    )
+
+
+def _configure_chat_credentials(*, force: bool = False) -> None:
+    """
+    Ensure chat API credentials are available.
+
+    When force is False (mosaic check): skip if a key is already configured.
+    When force is True (mosaic settings): always prompt, verify, and save.
     """
     existing = peek_chat_settings()
-    if existing is not None:
+    if existing is not None and not force:
         return
 
-    typer.echo("Chat API key is required for mosaic check (BYOK).")
+    if force:
+        typer.echo("\nReconfigure chat / LLM provider (BYOK).")
+    else:
+        typer.echo("Chat API key is required for mosaic check (BYOK).")
     typer.echo(
         "Use any OpenAI-compatible provider key (OpenAI, Groq, OpenRouter, "
         "Together, local gateway, …) — not OpenAI-only."
     )
     typer.echo("Any key format is accepted (no sk- prefix required).")
+
+    previous_model = existing.model if existing is not None else ""
+    default_provider_raw = "1"
+    if existing is not None:
+        if existing.api_base:
+            inferred = resolve_chat_provider(existing.api_base)
+            default_provider_raw = _provider_default_raw(inferred)
+        else:
+            default_provider_raw = "1"
 
     api_key = ""
     while not api_key:
@@ -714,9 +762,9 @@ def _ensure_chat_credentials() -> None:
         if not api_key:
             typer.echo("API key cannot be empty.")
 
-    provider = _prompt_chat_provider()
+    provider = _prompt_chat_provider(default_raw=default_provider_raw)
     api_base = provider.api_base
-    model = _prompt_chat_model(provider)
+    model = _prompt_chat_model(provider, previous_model=previous_model)
 
     while True:
         settings = ChatSettings(api_key=api_key, model=model, api_base=api_base)
@@ -742,16 +790,9 @@ def _ensure_chat_credentials() -> None:
             ).strip()
             if not api_key:
                 raise typer.Exit(code=1) from exc
-            # Prefer the last resolved provider number when re-prompting.
-            default_raw = {
-                "openai": "1",
-                "groq": "2",
-                "openrouter": "3",
-                "custom": "4",
-            }.get(provider.provider_id, "1")
-            if provider.provider_id == "custom" and api_base:
-                default_raw = api_base
-            provider = _prompt_chat_provider(default_raw=default_raw)
+            provider = _prompt_chat_provider(
+                default_raw=_provider_default_raw(provider)
+            )
             api_base = provider.api_base
             model = _prompt_chat_model(provider, previous_model=model)
 
@@ -766,23 +807,46 @@ def _ensure_chat_credentials() -> None:
             api_key=api_key,
             model=model,
             api_base=api_base,
+            provider=provider.provider_id,
             env_path=GLOBAL_ENV_PATH,
         )
-        saved = "CHAT_API_KEY / CHAT_MODEL"
-        if api_base:
-            saved += " / CHAT_API_BASE"
+        saved = "CHAT_API_KEY / CHAT_MODEL / CHAT_API_BASE / CHAT_PROVIDER"
         typer.echo(f"Saved {saved} to {path}")
     else:
         path = save_chat_settings(
             api_key=api_key,
             model=model,
             api_base=api_base,
+            provider=provider.provider_id,
             env_path=ENV_PATH,
         )
-        saved = "CHAT_API_KEY / CHAT_MODEL"
-        if api_base:
-            saved += " / CHAT_API_BASE"
+        saved = "CHAT_API_KEY / CHAT_MODEL / CHAT_API_BASE / CHAT_PROVIDER"
         typer.echo(f"Saved {saved} to {path} (project only)")
+
+
+def _ensure_chat_credentials() -> None:
+    """Ensure a chat API key is available for mosaic check (skip if set)."""
+    _configure_chat_credentials(force=False)
+
+
+@app.command("settings")
+def settings_cmd() -> None:
+    """
+    View or change BYOK chat / LLM provider settings.
+
+    Embedding settings are not changed here — use `mosaic build` (full re-index).
+    """
+    _echo_current_chat_settings()
+    if not typer.confirm("Change chat provider settings?", default=True):
+        typer.echo("No changes made.")
+        return
+    try:
+        _configure_chat_credentials(force=True)
+    except ChatError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _log_chat_setup("Chat settings updated; next mosaic check will use them.")
+    _echo_current_chat_settings()
 
 
 @app.command("check")

@@ -76,12 +76,14 @@ def save_chat_settings(
     api_key: str,
     model: str,
     api_base: Optional[str] = None,
+    provider: Optional[str] = None,
     env_path: Path = GLOBAL_ENV_PATH,
 ) -> Path:
     """
     Persist chat credentials to an env file (global ~/.mosaic/.env by default).
 
-    Writes CHAT_API_KEY, CHAT_MODEL, and CHAT_API_BASE when a base URL is set.
+    Always writes CHAT_API_KEY, CHAT_MODEL, and CHAT_API_BASE (empty string clears
+    a stale base when switching to OpenAI). Optionally writes CHAT_PROVIDER.
     Also updates process env so the current run can use the values immediately.
     """
     cleaned_key = (api_key or "").strip()
@@ -94,19 +96,25 @@ def save_chat_settings(
     if env_path == GLOBAL_ENV_PATH:
         ensure_global_mosaic_dir()
 
+    cleaned_base = (api_base or "").strip()
+    cleaned_provider = (provider or "").strip().lower()
     values: Dict[str, str] = {
         "CHAT_API_KEY": cleaned_key,
         "CHAT_MODEL": cleaned_model,
+        "CHAT_API_BASE": cleaned_base,
     }
-    cleaned_base = (api_base or "").strip()
-    if cleaned_base:
-        values["CHAT_API_BASE"] = cleaned_base
+    if cleaned_provider:
+        values["CHAT_PROVIDER"] = cleaned_provider
 
     update_env(values, env_path=env_path)
     os.environ["CHAT_API_KEY"] = cleaned_key
     os.environ["CHAT_MODEL"] = cleaned_model
     if cleaned_base:
         os.environ["CHAT_API_BASE"] = cleaned_base
+    else:
+        os.environ.pop("CHAT_API_BASE", None)
+    if cleaned_provider:
+        os.environ["CHAT_PROVIDER"] = cleaned_provider
     return env_path
 
 

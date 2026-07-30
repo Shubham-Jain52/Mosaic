@@ -33,7 +33,7 @@ Config is **per project** (`.env` + `.mosaic/`), not a global `~/.mosaic/config.
 
 - **Engine:** default auto-diff vs `main` (stdin / `--stdin` override); split into hunks → retrieve similar past comments from Chroma → LLM grades issues with severity and **cites past PRs**.
 - **Output:** readable terminal feedback (table or clear sections). Soft gate only — exit 0; does **not** block `git push`.
-- **BYOK chat setup UX (0.4.0, after engine quality is solid):** provider picker → model list/dropdown → API key entry (persist to `.env`). Supports OpenAI, Groq, Gemini, and OpenAI-compatible hosts via presets — not “paste any key with zero context.” Raw `CHAT_*` env config ships in 0.3.0 until then.
+- **BYOK chat setup UX (0.4.0):** `mosaic settings` (and first-run `mosaic check` prompts) — provider picker → sample model list → API key entry (persist to `.env`). Supports OpenAI, Groq, OpenRouter, and OpenAI-compatible hosts via presets. Embedding changes remain via `mosaic build`.
 
 ## Non-goals (v1.0.0)
 
@@ -110,7 +110,7 @@ mosaic check
 # optional: git diff main | mosaic check --stdin
 ```
 
-1. Require a prior `build` (index exists) and BYOK chat credentials (env today; provider → model → key setup UX as FR-11 in **0.4.0**).
+1. Require a prior `build` (index exists) and BYOK chat credentials (`mosaic settings` / first-run `check` prompts / `CHAT_*` env).
 2. Default: resolve baseline (`main` / `master` / remotes) and run `git diff <base>`; or use piped/`--stdin` diff.
 3. If empty/trivial diff → “no meaningful changes detected” (no LLM).
 4. For each hunk, retrieve top-k similar past comments from Chroma.
@@ -140,7 +140,7 @@ Downstream code calls:
 | FR-8 | `mosaic sync` imports only PR numbers not yet in SQLite and delta-indexes them |
 | FR-9 | API path verifies embeddings via live ping; Hugging Face also checks Hub model metadata |
 | FR-10 | **0.3.0+:** `mosaic check` analyzes working-tree diff vs main (stdin override), returns graded (blocking / suggestion / nit), cited, advisory feedback; exit 0 |
-| FR-11 | **0.4.0:** BYOK chat setup — select provider, choose model from a list, enter API key (CLI prompts and/or TUI); persist to `.env` |
+| FR-11 | **0.4.0:** `mosaic settings` — view/change BYOK chat (provider → sample models → API key); persist `CHAT_*` to `.env`; embeddings unchanged (use `mosaic build`) |
 
 ## Data captured
 
@@ -169,14 +169,14 @@ Fields: comment_id, comment_type, pr_number, body, diff_hunk, file_path, author,
 - `mosaic check` prints structured, severity-graded, PR-cited feedback on real diffs.
 - Empty / irrelevant diffs do not hallucinate generic advice (“no meaningful changes” / “not enough relevant history”).
 - Tool remains advisory (exit 0); no push-blocking hook in v1.0.0.
-- Users can configure chat via `.env` in 0.3.0; provider → model list → API key UX lands in **0.4.0**.
+- Users can configure chat via `.env` or **`mosaic settings`** (0.4.0); first-run prompts on `mosaic check` if missing.
 
 ## Planned — Not in v1.0.0
 
 - **`mosaic describe`** — generate a PR description from the current diff and review history.
 - **`mosaic ask`** — answer questions about team workflow / review practices for new members.
 
-Full post-1.0.0 backlog (full interactive TUI shell, local chat LLM, PyPI, sync gaps, etc.): [ROADMAP.md](ROADMAP.md). Chat provider → model → key setup is a **0.4.0** goal (see FR-11).
+Full post-1.0.0 backlog (full interactive TUI shell, local chat LLM, PyPI, sync gaps, etc.): [ROADMAP.md](ROADMAP.md). Chat provider reconfigure via **`mosaic settings`** shipped in **0.4.0** (FR-11).
 
 ## Planned — v1.1+
 
