@@ -62,6 +62,25 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-30
+
+### Added
+
+- **`mosaic check`** — advisory review of working-tree changes vs `main`/`master` (auto `git diff`; `--stdin` / pipe override).
+- Diff parser + trivial-diff guard (`no meaningful changes detected` — no LLM call).
+- Chroma retrieval per hunk (`pipeline/retriever.py`) and BYOK OpenAI-compatible chat (`ai/chat.py`, `ai/analyzer.py`).
+- Graded findings: BLOCKING / SUGGESTION / NIT with cited PR numbers; blank-drop when history is thin.
+- Unit tests and `tests/eval_check.py` for parser / trivial / cheap eval paths.
+
+### Changed
+
+- Docs/roadmap: check engine ships in **0.3.0**; provider → model → key setup UX deferred to **0.4.0**.
+
+### Notes
+
+- Configure chat via `.env`: `CHAT_API_KEY` (or `OPENAI_API_KEY`), optional `CHAT_API_BASE`, `CHAT_MODEL`.
+- Interactive TUI / provider dropdown is **not** in 0.3.0 (planned for 0.4.0).
+
 ## [0.2.0] - 2026-07-29
 
 ### Added

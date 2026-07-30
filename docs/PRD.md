@@ -15,7 +15,7 @@ Config is **per project** (`.env` + `.mosaic/`), not a global `~/.mosaic/config.
 | Phase | Meaning |
 |-------|---------|
 | **Foundation (shipped)** | `init`, `build`, `sync` |
-| **v1.0.0 (the product goal)** | **`mosaic check` only** — soft-gate, graded, cited feedback |
+| **v1.0.0 (the product goal)** | Polished **`mosaic check`** soft-gate (engine shipped in 0.3.0; BYOK setup UX in 0.4.0) |
 | **Post-1.0.0** | See [ROADMAP.md](ROADMAP.md) |
 
 ## Goals
@@ -31,17 +31,15 @@ Config is **per project** (`.env` + `.mosaic/`), not a global `~/.mosaic/config.
 
 **`mosaic check`** is the single defining feature of v1.0.0:
 
-- Input: unified diff on stdin (e.g. `git diff main | mosaic check`).
-- Behavior: split into hunks → retrieve similar past comments from Chroma → LLM grades issues with severity and **cites past PRs**.
-- Output: readable terminal feedback (table or clear sections).
-- Soft gate only: advisory; always exit 0 in v1.0.0. Does **not** block `git push`.
+- **Engine:** default auto-diff vs `main` (stdin / `--stdin` override); split into hunks → retrieve similar past comments from Chroma → LLM grades issues with severity and **cites past PRs**.
+- **Output:** readable terminal feedback (table or clear sections). Soft gate only — exit 0; does **not** block `git push`.
+- **BYOK chat setup UX (0.4.0, after engine quality is solid):** provider picker → model list/dropdown → API key entry (persist to `.env`). Supports OpenAI, Groq, Gemini, and OpenAI-compatible hosts via presets — not “paste any key with zero context.” Raw `CHAT_*` env config ships in 0.3.0 until then.
 
 ## Non-goals (v1.0.0)
 
 - `mosaic ask` / `mosaic describe` (deferred — see below)
 - Hard gate / git pre-push hook that fails the push (deferred until `check` is trusted)
 - Local / on-device **chat** LLM (embeddings may be local; chat is BYOK)
-- Interactive TUI (post-1.0.0; core APIs should stay TUI-callable)
 - Fully offline end-to-end product
 - OAuth / GitHub App install flows
 - Multi-repo databases in one DB file
@@ -103,17 +101,19 @@ mosaic sync
 3. If none missing → “Everything up to date.”
 4. Else fetch only missing PRs → save → delta vectorize → update sync state → ready message.
 
-### 4. Check — v1.0.0 target (not shipped yet)
+### 4. Check — v1.0.0
 
 ```text
-git diff main | mosaic check
+mosaic check
+# optional: git diff main | mosaic check --stdin
 ```
 
-1. Require a prior `build` (index exists) and BYOK chat credentials.
-2. Parse stdin unified diff into per-file hunks.
-3. For each hunk, retrieve top-k similar past comments from Chroma.
-4. LLM returns graded, cited feedback; if history is thin, say so explicitly (no invented generic advice).
-5. Print readable terminal output; exit 0 (advisory).
+1. Require a prior `build` (index exists) and BYOK chat credentials (env today; provider → model → key setup UX as FR-11 in **0.4.0**).
+2. Default: resolve baseline (`main` / `master` / remotes) and run `git diff <base>`; or use piped/`--stdin` diff.
+3. If empty/trivial diff → “no meaningful changes detected” (no LLM).
+4. For each hunk, retrieve top-k similar past comments from Chroma.
+5. LLM returns graded, cited feedback; if history is thin, say so explicitly (no invented generic advice).
+6. Print readable terminal output; exit 0 (advisory).
 
 ### 5. Read API (shipped library)
 
@@ -137,7 +137,8 @@ Downstream code calls:
 | FR-7 | Fail clearly on missing config or GitHub rate-limit exhaustion |
 | FR-8 | `mosaic sync` imports only PR numbers not yet in SQLite and delta-indexes them |
 | FR-9 | API path verifies embeddings via live ping; Hugging Face also checks Hub model metadata |
-| FR-10 | **v1.0.0:** `mosaic check` reads diff from stdin, returns graded (blocking / suggestion / nit), cited, advisory feedback; exit 0 |
+| FR-10 | **0.3.0+:** `mosaic check` analyzes working-tree diff vs main (stdin override), returns graded (blocking / suggestion / nit), cited, advisory feedback; exit 0 |
+| FR-11 | **0.4.0:** BYOK chat setup — select provider, choose model from a list, enter API key (CLI prompts and/or TUI); persist to `.env` |
 
 ## Data captured
 
@@ -163,16 +164,17 @@ Fields: comment_id, comment_type, pr_number, body, diff_hunk, file_path, author,
 
 **v1.0.0 (target):**
 
-- `git diff … | mosaic check` prints structured, severity-graded, PR-cited feedback.
-- Empty / irrelevant diffs do not hallucinate generic advice (“not enough relevant history”).
+- `mosaic check` prints structured, severity-graded, PR-cited feedback on real diffs.
+- Empty / irrelevant diffs do not hallucinate generic advice (“no meaningful changes” / “not enough relevant history”).
 - Tool remains advisory (exit 0); no push-blocking hook in v1.0.0.
+- Users can configure chat via `.env` in 0.3.0; provider → model list → API key UX lands in **0.4.0**.
 
 ## Planned — Not in v1.0.0
 
 - **`mosaic describe`** — generate a PR description from the current diff and review history.
 - **`mosaic ask`** — answer questions about team workflow / review practices for new members.
 
-Full post-1.0.0 backlog (TUI, local chat LLM, PyPI, sync gaps, etc.): [ROADMAP.md](ROADMAP.md).
+Full post-1.0.0 backlog (full interactive TUI shell, local chat LLM, PyPI, sync gaps, etc.): [ROADMAP.md](ROADMAP.md). Chat provider → model → key setup is a **0.4.0** goal (see FR-11).
 
 ## Planned — v1.1+
 

@@ -149,7 +149,7 @@ On HTTP 403 with `X-RateLimit-Remaining: 0`, raise `GitHubAPIError` including re
 | `mosaic build` | Shipped | Embedder setup + full scrape + full Chroma index + sync state |
 | `mosaic sync` | Shipped | PRs not in SQLite → delta scrape + delta vectorize + update sync state |
 | `mosaic help` | Shipped | Product overview |
-| `mosaic check` | **v1.0.0** | Stdin diff → retrieve → BYOK LLM → graded cited output; exit 0 |
+| `mosaic check` | **0.3.0** | Auto git diff vs main (stdin override) → retrieve → BYOK LLM → graded cited output; exit 0 |
 
 ## Embedding + vector index (shipped)
 
@@ -227,6 +227,8 @@ BaseAnalyzer (ABC):
 - **No local chat LLM in v1.0.0.**
 - Log an approximate LLM **call count** when `check` runs (cost visibility).
 
+**0.4.0 chat setup UX (after engine is trusted):** guided config — **provider → model list → API key** (CLI prompts first; same flow in TUI dropdowns later). Presets map providers (OpenAI, Groq, Gemini, openai_compatible) to base URLs / default model catalogs; custom base URL only for compatible. Persist `CHAT_PROVIDER` / `CHAT_MODEL` / `CHAT_API_KEY` / optional `CHAT_API_BASE` in `.env`. Check engine (0.3.0) uses raw env vars until this lands.
+
 ### Diff parsing
 
 - New small module (preferred: `core/diff_parser.py`): raw unified diff text → iterable per-file / per-hunk chunks (`file_path`, hunk header, body).
@@ -283,8 +285,8 @@ Cheap checks: pipe empty stdin / noop diff; run two real diffs and compare citat
 
 ## Implemented so far / next technical phase
 
-**Done (foundation):** per-project config (`.env` + `.mosaic/`), CLI `init` / `build` / `sync` / `help`, full pagination, labeled comments, SQLite upsert, repository read helpers, sync state + delta sync, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma full + delta index.
+**Done (foundation + 0.3.0):** per-project config (`.env` + `.mosaic/`), CLI `init` / `build` / `sync` / `help` / `check`, full pagination, labeled comments, SQLite upsert, repository read helpers, sync state + delta sync, API embeddings (OpenAI/HF/compatible) with ping + HF Hub metadata verify, optional fastembed local via `mosaic-cli[local]`, Chroma full + delta index, check runner (diff parse, git auto-diff, retrieval, BYOK OpenAI-compatible analyzer).
 
-**Next (v1.0.0):** implement `mosaic check` per the section above (diff parser, Chroma query helper, BYOK chat client, `Feedback` / `BaseAnalyzer`, CLI + formatting, blank-drop/swap checks, eval script).
+**Next (0.4.0):** chat provider → model list → API key setup UX (CLI/TUI).
 
-**After v1.0.0:** [ROADMAP.md](ROADMAP.md) — `ask`, `describe`, hard gate, local chat LLM, TUI, PyPI, sync gaps, etc.
+**After:** [ROADMAP.md](ROADMAP.md) — `ask`, `describe`, hard gate, local chat LLM, fuller TUI, PyPI, sync gaps, etc.
