@@ -9,8 +9,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ai.chat import (
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_GROQ_CHAT_MODEL,
+    GROQ_API_BASE,
     ChatError,
     ChatSettings,
+    default_chat_model_for_base,
     get_chat_settings,
     peek_chat_settings,
     verify_chat_settings,
@@ -92,17 +96,33 @@ class ChatSettingsLookupTests(unittest.TestCase):
                 cfg, "GLOBAL_ENV_PATH", global_env
             ):
                 path = cfg.save_chat_settings(
-                    api_key="sk-test",
-                    model="gpt-4o-mini",
-                    api_base="https://example.com/v1",
+                    api_key="gsk-test-not-openai",
+                    model=DEFAULT_GROQ_CHAT_MODEL,
+                    api_base=GROQ_API_BASE,
                     env_path=global_env,
                 )
                 self.assertEqual(path, global_env)
                 text = global_env.read_text()
-                self.assertIn("CHAT_API_KEY=sk-test", text)
-                self.assertIn("CHAT_MODEL=gpt-4o-mini", text)
-                self.assertIn("CHAT_API_BASE=https://example.com/v1", text)
-                self.assertEqual(os.environ.get("CHAT_API_KEY"), "sk-test")
+                self.assertIn("CHAT_API_KEY=gsk-test-not-openai", text)
+                self.assertIn(f"CHAT_MODEL={DEFAULT_GROQ_CHAT_MODEL}", text)
+                self.assertIn(f"CHAT_API_BASE={GROQ_API_BASE}", text)
+                self.assertEqual(os.environ.get("CHAT_API_KEY"), "gsk-test-not-openai")
+
+
+class DefaultChatModelForBaseTests(unittest.TestCase):
+    def test_groq_base_uses_groq_model(self) -> None:
+        self.assertEqual(
+            default_chat_model_for_base(GROQ_API_BASE),
+            DEFAULT_GROQ_CHAT_MODEL,
+        )
+
+    def test_blank_or_openai_uses_default(self) -> None:
+        self.assertEqual(default_chat_model_for_base(None), DEFAULT_CHAT_MODEL)
+        self.assertEqual(default_chat_model_for_base(""), DEFAULT_CHAT_MODEL)
+        self.assertEqual(
+            default_chat_model_for_base("https://api.openai.com/v1"),
+            DEFAULT_CHAT_MODEL,
+        )
 
 
 class VerifyChatSettingsTests(unittest.TestCase):
@@ -121,6 +141,22 @@ class VerifyChatSettingsTests(unittest.TestCase):
         self.assertEqual(kwargs["model"], "gpt-4o-mini")
         self.assertEqual(kwargs["max_tokens"], 1)
         self.assertEqual(kwargs["messages"], [{"role": "user", "content": "ping"}])
+
+    def test_verify_passes_custom_base_url(self) -> None:
+        mock_client = MagicMock()
+        mock_openai = MagicMock(return_value=mock_client)
+        with patch("openai.OpenAI", mock_openai):
+            verify_chat_settings(
+                ChatSettings(
+                    api_key="gsk-groq-key",
+                    model=DEFAULT_GROQ_CHAT_MODEL,
+                    api_base=GROQ_API_BASE,
+                )
+            )
+        mock_openai.assert_called_once_with(
+            api_key="gsk-groq-key",
+            base_url=GROQ_API_BASE,
+        )
 
     def test_verify_raises_on_api_failure(self) -> None:
         mock_client = MagicMock()
@@ -183,7 +219,7 @@ class EnsureChatCredentialsTests(unittest.TestCase):
             ), patch.object(
                 cli_main.typer,
                 "prompt",
-                side_effect=["gpt-4o-mini", ""],
+                side_effect=["", "gpt-4o-mini"],
             ), patch.object(
                 cli_main.typer, "confirm", return_value=True
             ), patch.object(
@@ -195,10 +231,61 @@ class EnsureChatCredentialsTests(unittest.TestCase):
             ):
                 cli_main._ensure_chat_credentials()
                 mock_verify.assert_called_once()
+                settings = mock_verify.call_args.args[0]
+                self.assertEqual(settings.api_key, "sk-new")
+                self.assertIsNone(settings.api_base)
+                self.assertEqual(settings.model, "gpt-4o-mini")
                 text = global_env.read_text()
                 self.assertIn("CHAT_API_KEY=sk-new", text)
                 self.assertIn("CHAT_MODEL=gpt-4o-mini", text)
+                self.assertNotIn("CHAT_API_BASE", text)
                 self.assertEqual(os.environ.get("CHAT_API_KEY"), "sk-new")
+
+    def test_prompts_groq_base_and_saves_base(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home_mosaic = Path(tmp) / ".mosaic"
+            global_env = home_mosaic / ".env"
+            project_env = Path(tmp) / "project.env"
+
+            prompt_defaults: list = []
+
+            def prompt_side_effect(text, default="", show_default=True):
+                prompt_defaults.append(default)
+                if "base URL" in text:
+                    return GROQ_API_BASE
+                return default
+
+            with patch.object(cfg, "GLOBAL_MOSAIC_DIR", home_mosaic), patch.object(
+                cfg, "GLOBAL_ENV_PATH", global_env
+            ), patch.object(cfg, "ENV_PATH", project_env), patch.object(
+                cli_main, "GLOBAL_ENV_PATH", global_env
+            ), patch.object(cli_main, "ENV_PATH", project_env), patch.object(
+                cli_main, "peek_chat_settings", return_value=None
+            ), patch.object(
+                cli_main.getpass, "getpass", return_value="gsk_groq_key"
+            ), patch.object(
+                cli_main.typer, "prompt", side_effect=prompt_side_effect
+            ), patch.object(
+                cli_main.typer, "confirm", return_value=True
+            ), patch.object(
+                cli_main, "verify_chat_settings"
+            ) as mock_verify, patch.object(
+                cli_main.typer, "echo"
+            ), patch.object(
+                cli_main.typer, "secho"
+            ):
+                cli_main._ensure_chat_credentials()
+                mock_verify.assert_called_once()
+                settings = mock_verify.call_args.args[0]
+                self.assertEqual(settings.api_key, "gsk_groq_key")
+                self.assertEqual(settings.api_base, GROQ_API_BASE)
+                self.assertEqual(settings.model, DEFAULT_GROQ_CHAT_MODEL)
+                # Model prompt should default to Groq after base is known.
+                self.assertIn(DEFAULT_GROQ_CHAT_MODEL, prompt_defaults)
+                text = global_env.read_text()
+                self.assertIn("CHAT_API_KEY=gsk_groq_key", text)
+                self.assertIn(f"CHAT_MODEL={DEFAULT_GROQ_CHAT_MODEL}", text)
+                self.assertIn(f"CHAT_API_BASE={GROQ_API_BASE}", text)
 
 
 if __name__ == "__main__":
