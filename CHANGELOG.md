@@ -62,6 +62,18 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-30
+
+### Added
+
+- **Provider aliases for `mosaic check` chat setup** — choose OpenAI / Groq / OpenRouter by number or name (e.g. `Groq`), or paste a custom full URL; aliases resolve to the correct API base automatically.
+- **Sample models per provider** — numbered list of known models with an “Other / custom” option (light interactive UX; full TUI remains 0.4.0).
+- **Credential-setup logging** — `[mosaic]` lines for resolved base URL, chosen model, verify attempt, and success/failure (failure includes resolved base + model, never the API key).
+
+### Changed
+
+- Groq default / recommended sample model is now `openai/gpt-oss-20b` (current Groq production); `llama-3.3-70b-versatile` remains listed as a sample.
+
 ## [0.3.4] - 2026-07-30
 
 ### Fixed
