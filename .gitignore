@@ -1,10 +1,17 @@
 # environments
 .venv/
 
-#env
+# env / secrets
 .env
 
-#folders
-mosaic.egg-info/
+# local mosaic data
 .mosaic/
+mosaic.db
 
+# packaging / caches
+mosaic.egg-info/
+mosaic_cli.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/

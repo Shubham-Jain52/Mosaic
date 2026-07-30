@@ -1,18 +1,34 @@
 # Mosaic — Roadmap
 
-Durable backlog after the foundation and after v1.0.0. Product and technical detail for what ships *in* v1.0.0 lives in [PRD.md](PRD.md) and [TRD.md](TRD.md).
+Versioned product direction. Engine/design detail lives in [PRD.md](PRD.md) and [TRD.md](TRD.md).
 
 ## Phases
 
 | Phase | Status | What it is |
 |-------|--------|------------|
 | **Foundation** | Shipped | `init`, `build`, `sync` — local SQLite + Chroma corpus; embeddings via API or optional local fastembed |
-| **v1.0.0** | Target | **`mosaic check` only** — advisory, cited, soft-gate feedback from team review history (BYOK chat) |
+| **0.3.0** | Shipped (this release) | **`mosaic check` engine** — auto-diff vs main, retrieve past review comments, graded cited feedback (BYOK chat via `.env`) |
+| **0.4.0** | Next | Chat setup UX — provider → model list/dropdown → API key (CLI prompts / TUI); presets for OpenAI, Groq, Gemini, openai_compatible |
+| **v1.0.0** | Target milestone | Product-complete soft-gate `check` experience (engine + polished BYOK UX); still advisory (no hard gate) |
 | **Post-1.0.0** | Backlog below | Everything else |
 
-## v1.0.0 target (pointer)
+## 0.3.0 — check engine (shipped)
 
-**`mosaic check`** — pipe a diff (`git diff main | mosaic check`), retrieve similar past review comments per hunk, grade BLOCKING / SUGGESTION / NIT with PR citations. Advisory only (exit 0); no hard gate. Embeddings may be local; the LLM step is BYOK OpenAI-compatible API. See PRD / TRD for design.
+- Default: `mosaic check` runs `git diff` against `origin/main` / `main` / `master` (stdin / `--stdin` override).
+- Trivial/empty diff → `no meaningful changes detected` (no LLM).
+- Per-hunk Chroma retrieval + OpenAI-compatible chat → BLOCKING / SUGGESTION / NIT with PR citations.
+- Configure chat with `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE`.
+
+## 0.4.0 — chat setup UX (planned)
+
+Guided BYOK so users don’t hand-edit obscure env vars:
+
+- Select **chat provider** (OpenAI, Groq, Gemini, OpenAI-compatible)
+- Choose a **model from a provider-specific list** (dropdown in TUI / prompted list in CLI)
+- Enter **API key** (stored in `.env`)
+- Optional custom base URL for compatible hosts only
+
+Env vars remain the backing store. Full interactive TUI shell can grow from this surface.
 
 ---
 

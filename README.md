@@ -1,23 +1,21 @@
 # Mosaic
 
-Local-first, BYOK CLI: turn a GitHub repository’s PR review feedback into a **local** SQLite dataset and Chroma vector index, then (v1.0.0) run **`mosaic check`** for advisory, cited pre-push feedback.
+Local-first, BYOK CLI: turn a GitHub repository’s PR review feedback into a **local** SQLite dataset and Chroma vector index, then run **`mosaic check`** for advisory, cited pre-push feedback grounded in your team’s past reviews.
 
 - **Local-first data** — corpus and vectors live in the project (`mosaic.db`, `.mosaic/`).
 - **Embeddings** — OpenAI, Hugging Face, OpenAI-compatible APIs, or optional **on-device fastembed** (`mosaic-cli[local]`).
-- **Chat for `check`** — bring-your-own-key OpenAI-compatible API. Mosaic is **not** fully offline end-to-end at v1.0.0; local chat LLM is later ([docs/ROADMAP.md](docs/ROADMAP.md)).
-
-Connect a repo with a Personal Access Token, run a full build (scrape + embeddings + Chroma), use `mosaic sync` for new PRs, then (when v1.0.0 ships) pipe a diff into `mosaic check`.
+- **Chat for `check`** — bring-your-own-key OpenAI-compatible API (OpenAI, Groq, Gemini compat, etc. via `CHAT_API_BASE`). Not fully offline end-to-end; local chat LLM is later ([docs/ROADMAP.md](docs/ROADMAP.md)).
 
 ## Features
 
 - Connect one GitHub repo via PAT (`mosaic init`)
 - **`mosaic build`** — full scrape of labeled comments + embedder setup + vector index
 - **`mosaic sync`** — fetch PRs not yet in SQLite, vectorize only the delta
+- **`mosaic check`** — auto-diff vs main → graded, cited feedback (BYOK chat)
 - Comment kinds: review (inline), issue (conversation), review summaries
 - Embeddings: API providers or optional **local fastembed** (embeddings only — not chat)
 - Sync bookmarks in `.mosaic/sync_state.json`
 - `mosaic help` for a quick overview
-- **Coming in v1.0.0:** `mosaic check` — `git diff … | mosaic check` → graded, cited, advisory feedback (BYOK chat)
 
 **V1 sync limitation:** only new PR *numbers* are imported (new comments on existing PRs are not re-fetched yet).
 
@@ -25,9 +23,11 @@ Connect a repo with a Personal Access Token, run a full build (scrape + embeddin
 
 - Python ≥ 3.9
 - A GitHub Personal Access Token with read access to the target repo’s pull requests / comments
-- For **`mosaic check` (v1.0.0):** an OpenAI-compatible API key (BYOK); embeddings may still be local
+- For **`mosaic check`:** an OpenAI-compatible chat API key (BYOK); embeddings may still be local
 
 ## Install
+
+From this repo (recommended while developing):
 
 ```bash
 python -m venv .venv
@@ -35,6 +35,13 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 pip install -e .            # API-only (lightweight)
 # pip install -e '.[local]' # optional on-device embeddings (fastembed)
+```
+
+System-wide style (same machine):
+
+```bash
+pipx install -e /path/to/Mosaic
+# later: pipx install mosaic-cli   # after PyPI publish
 ```
 
 Or with requirements files:
@@ -51,8 +58,14 @@ mosaic help                  # what Mosaic does + command list
 mosaic init                  # prompt for repo URL + PAT → .env, create tables
 mosaic build                 # full scrape + embeddings + Chroma index
 mosaic sync                  # later: only new PRs + delta vectors
-# v1.0.0 (upcoming):
-# git diff main | mosaic check
+
+# Chat for check (in .env):
+# CHAT_API_KEY=...
+# CHAT_MODEL=gpt-4o-mini          # or provider model id
+# CHAT_API_BASE=...               # optional (Groq, Gemini OpenAI-compat, etc.)
+
+mosaic check                 # auto git diff vs main/master
+# git diff main | mosaic check --stdin
 ```
 
 For a fresh real build after test data, delete `mosaic.db` (and optionally `.mosaic/`) then re-run `init` + `build`.
@@ -65,22 +78,22 @@ For a fresh real build after test data, delete `mosaic.db` (and optionally `.mos
 | `mosaic init` | Save repo URL + PAT to `.env`, create SQLite schema |
 | `mosaic build` | Full ingest + configure embeddings + build Chroma index |
 | `mosaic sync` | Delta: PRs missing from DB → save → vectorize → ready |
-| `mosaic check` | **v1.0.0 (upcoming)** — advisory cited feedback from stdin diff |
+| `mosaic check` | Advisory cited feedback from changes vs main (BYOK chat) |
 
 Use `mosaic <command> --help` for flags on a specific command.
 
 ## Project layout
 
 ```text
-cli/           Typer CLI (init, build, sync, help; check in v1.0.0)
-core/          Config, models, SQLite ORM, repository, sync_state
+cli/           Typer CLI (init, build, sync, check, help)
+core/          Config, models, SQLite ORM, repository, sync_state, diff/git helpers
 scrapers/      GitHub API client (PRs + labeled comments)
-ai/            Embedding backends (API + optional fastembed); chat for check (v1.0.0)
-pipeline/      Chroma indexer (full + delta)
+ai/            Embeddings + BYOK chat analyzer for check
+pipeline/      Chroma indexer + retriever + check runner
 docs/          PRD, TRD, ROADMAP
 .env           Secrets and connection settings (gitignored)
 .mosaic/       Chroma store, config.json, sync_state.json (gitignored)
-mosaic.db      Local SQLite corpus
+mosaic.db      Local SQLite corpus (gitignored)
 ```
 
 ## Configuration
@@ -89,24 +102,25 @@ Per-project (not a global `~/.mosaic/` profile):
 
 | Location | Contents |
 |----------|----------|
-| `.env` | `GITHUB_TOKEN`, `REPO_*`, embedding keys / backend settings; (v1.0.0) BYOK chat credentials |
+| `.env` | `GITHUB_TOKEN`, `REPO_*`, embedding keys / backend; `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE` |
 | `.mosaic/config.json` | Non-secret build metadata (model name, chroma path, …) |
 | `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at` |
 | `.mosaic/chroma/` | Persistent vector index |
 
-Do not commit `.env` or `.mosaic/`.
+Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 
 ## Documentation
 
 - [Product requirements (PRD)](docs/PRD.md)
 - [Technical requirements (TRD)](docs/TRD.md)
-- [Roadmap (post-1.0.0)](docs/ROADMAP.md)
+- [Roadmap](docs/ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 
 ## Status
 
 | Phase | Status |
 |-------|--------|
-| **Foundation** | Shipped: `init` → `build` (scrape + index) → `sync` (delta PRs) |
-| **v1.0.0** | Target: **`mosaic check`** only (BYOK chat; advisory soft gate; local embeddings optional) |
-| **After v1.0.0** | `ask`, `describe`, hard gate, TUI, local chat LLM, PyPI, sync gaps, … — see [docs/ROADMAP.md](docs/ROADMAP.md) |
+| **Foundation** | Shipped: `init` → `build` → `sync` |
+| **0.3.0** | Shipped: **`mosaic check`** engine (auto-diff, retrieval, BYOK chat via env) |
+| **0.4.0** | Planned: chat provider → model list → API key setup UX (CLI/TUI) |
+| **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |

@@ -1,12 +1,14 @@
-"""Mosaic CLI — init, build (ingest + index), and sync."""
+"""Mosaic CLI — init, build (ingest + index), sync, and check."""
 
 from __future__ import annotations
 
 import getpass
+import sys
 from typing import Dict, List, Optional, Set
 
 import typer
 
+from ai.chat import ChatError
 from ai.embeddings import (
     EmbeddingError,
     LocalEmbedder,
@@ -26,6 +28,7 @@ from core.config import (
     write_env,
 )
 from core.database import init_db, save_data_to_db
+from core.git_diff import GitDiffError, get_working_diff, resolve_diff_base
 from core.repository import (
     comment_ids_for_prs,
     count_comments_by_type,
@@ -37,6 +40,7 @@ from core.sync_state import (
     record_full_build,
     record_sync_delta,
 )
+from pipeline.check_runner import run_check
 from pipeline.indexer import build_vector_index, index_corpus_delta
 from scrapers.github import (
     GitHubAPIError,
@@ -66,16 +70,18 @@ Typical flow:
   1. mosaic init     Connect a repo + GitHub PAT (.env)
   2. mosaic build    Full scrape + configure embeddings + vector index
   3. mosaic sync     Fetch only new PRs and vectorize the delta (optional)
-  4. mosaic ask      (coming later) Query the index
+  4. mosaic check    Advisory review of your changes vs main (BYOK chat)
 
 Commands:
   init     Connect a GitHub repository (URL + PAT → .env, create DB tables)
   build    Full ingest + embedder setup + Chroma index (first-time pipeline)
   sync     Delta: PRs not yet in SQLite → save → vectorize → ready
+  check    Diff vs main (auto) → graded, cited feedback from past reviews
   help     Show this overview
 
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
+  • check needs CHAT_API_KEY (or OPENAI_API_KEY); pipe/stdin optional.
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
   • Secrets in .env; Chroma + sync state under .mosaic/ (gitignored)
@@ -434,6 +440,104 @@ def sync_cmd() -> None:
         fg=typer.colors.GREEN,
     )
     typer.secho("Mosaic is ready for your questions.", fg=typer.colors.GREEN)
+
+
+def _format_feedback_block(result) -> None:
+    if result.messages:
+        for msg in result.messages:
+            typer.echo(msg)
+
+    if not result.feedback:
+        if not result.messages:
+            typer.echo("No findings.")
+        return
+
+    order = {"blocking": 0, "suggestion": 1, "nit": 2}
+    sorted_items = sorted(
+        result.feedback,
+        key=lambda f: (order.get(f.severity, 9), f.file_path, f.issue),
+    )
+    typer.echo("")
+    typer.echo("Findings")
+    typer.echo("--------")
+    for item in sorted_items:
+        cites = ", ".join(f"#{n}" for n in item.cited_prs) or "(none)"
+        loc = item.file_path
+        if item.line_hint:
+            loc = f"{loc}:{item.line_hint}"
+        typer.echo(f"[{item.severity.upper()}] {loc}")
+        typer.echo(f"  {item.issue}")
+        typer.echo(f"  cited: {cites}")
+        typer.echo("")
+
+
+@app.command("check")
+def check_cmd(
+    top_k: int = typer.Option(
+        5,
+        "--top-k",
+        help="Number of similar past comments to retrieve per hunk.",
+    ),
+    base: Optional[str] = typer.Option(
+        None,
+        "--base",
+        help="Git ref to diff against (default: origin/main, main, …).",
+    ),
+    use_stdin: bool = typer.Option(
+        False,
+        "--stdin",
+        help="Read a unified diff from stdin instead of running git diff.",
+    ),
+) -> None:
+    """
+    Advisory check: compare your working tree to main and flag patterns
+    from past PR review comments (BYOK chat). Always exits 0 on success.
+    """
+    # Resolve diff text: --stdin always; non-empty pipe; else auto git diff
+    if use_stdin:
+        diff_text = sys.stdin.read()
+        typer.echo("Using diff from stdin")
+    elif not sys.stdin.isatty():
+        piped_text = sys.stdin.read()
+        if piped_text.strip():
+            diff_text = piped_text
+            typer.echo("Using diff from stdin")
+        else:
+            try:
+                resolved = resolve_diff_base(base)
+                diff_text = get_working_diff(resolved)
+            except GitDiffError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            typer.echo(f"Diffing against {resolved}")
+    else:
+        try:
+            resolved = resolve_diff_base(base)
+            diff_text = get_working_diff(resolved)
+        except GitDiffError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"Diffing against {resolved}")
+
+    try:
+        get_embedding_settings()
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        result = run_check(diff_text, top_k=top_k)
+    except (ChatError, EmbeddingError, RuntimeError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    if result.trivial:
+        typer.echo("no meaningful changes detected")
+        raise typer.Exit(code=0)
+
+    _format_feedback_block(result)
+    typer.echo(f"LLM calls: {result.llm_call_count} (hunks: {result.hunk_count})")
+    raise typer.Exit(code=0)
 
 
 def main() -> None:
