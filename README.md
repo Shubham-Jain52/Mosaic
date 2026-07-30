@@ -102,7 +102,8 @@ Per-project (not a global `~/.mosaic/` profile):
 
 | Location | Contents |
 |----------|----------|
-| `.env` | `GITHUB_TOKEN`, `REPO_*`, embedding keys / backend; `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE` |
+| `.env` | `REPO_*`, embedding keys / backend; optional project `GITHUB_TOKEN`; `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE` |
+| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN` (shared across projects) |
 | `.mosaic/config.json` | Non-secret build metadata (model name, chroma path, …) |
 | `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at` |
 | `.mosaic/chroma/` | Persistent vector index |
@@ -122,5 +123,6 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 |-------|--------|
 | **Foundation** | Shipped: `init` → `build` → `sync` |
 | **0.3.0** | Shipped: **`mosaic check`** engine (auto-diff, retrieval, BYOK chat via env) |
+| **0.3.1** | Shipped: global GitHub PAT (`~/.mosaic/.env`) so `init` does not re-prompt per repo |
 | **0.4.0** | Planned: chat provider → model list → API key setup UX (CLI/TUI) |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |
