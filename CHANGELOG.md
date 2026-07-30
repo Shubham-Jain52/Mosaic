@@ -62,6 +62,17 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-30
+
+### Added
+
+- **`mosaic check` prompts for a chat API key** when `CHAT_API_KEY` / `OPENAI_API_KEY` is missing (instead of failing immediately).
+- Key is verified with a cheap chat completion ping before use; settings saved to `~/.mosaic/.env` by default (project `.env` if declined).
+
+### Changed
+
+- Chat credentials follow the same global-first pattern as `MOSAIC_GITHUB_TOKEN`.
+
 ## [0.3.2] - 2026-07-30
 
 ### Fixed
