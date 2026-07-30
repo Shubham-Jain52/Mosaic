@@ -62,6 +62,12 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-30
+
+### Fixed
+
+- **`mosaic init` now updates project `.gitignore`** with `.env`, `.mosaic/`, and `mosaic.db` so secrets and local Mosaic data are not committed by accident.
+
 ## [0.3.1] - 2026-07-30
 
 ### Added

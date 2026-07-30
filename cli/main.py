@@ -32,6 +32,7 @@ from core.config import (
 )
 from core.database import init_db, save_data_to_db
 from core.git_diff import GitDiffError, get_working_diff, resolve_diff_base
+from core.gitignore_util import ensure_mosaic_gitignore
 from core.repository import (
     comment_ids_for_prs,
     count_comments_by_type,
@@ -182,6 +183,7 @@ def init_cmd(
         repo_url=repo_url,
         github_token=project_token,
     )
+    added_ignores = ensure_mosaic_gitignore()
     init_db()
 
     typer.secho("Saved connection settings to .env", fg=typer.colors.GREEN)
@@ -192,6 +194,13 @@ def init_cmd(
         typer.echo(f"  GitHub token = *** (global: {GLOBAL_ENV_PATH})")
     else:
         typer.echo("  GITHUB_TOKEN = *** (project .env)")
+    if added_ignores:
+        typer.secho(
+            "Updated .gitignore with: " + ", ".join(added_ignores),
+            fg=typer.colors.GREEN,
+        )
+    else:
+        typer.echo("Mosaic paths already present in .gitignore.")
     typer.echo("\nDatabase tables are ready (mosaic.db).")
     typer.echo(
         "Tip: if mosaic.db still has old test rows, delete it and re-run "

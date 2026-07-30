@@ -76,8 +76,9 @@ mosaic init
 1. Prompt for GitHub repo URL (`https://github.com/owner/repo` or `owner/repo`).
 2. Prompt for GitHub PAT (hidden input).
 3. Resolve GitHub PAT: use global `MOSAIC_GITHUB_TOKEN` if set; otherwise prompt once and offer to save to `~/.mosaic/.env`. Write `REPO_OWNER`, `REPO_NAME`, `REPO_URL` to project `.env` (token only if not using global).
-4. Create SQLite schema in `mosaic.db`.
-5. Instruct user to run `mosaic build`.
+4. Ensure project `.gitignore` includes `.env`, `.mosaic/`, and `mosaic.db` (create or append; idempotent).
+5. Create SQLite schema in `mosaic.db`.
+6. Instruct user to run `mosaic build`.
 
 ### 2. First build (shipped)
 

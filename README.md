@@ -124,5 +124,6 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 | **Foundation** | Shipped: `init` → `build` → `sync` |
 | **0.3.0** | Shipped: **`mosaic check`** engine (auto-diff, retrieval, BYOK chat via env) |
 | **0.3.1** | Shipped: global GitHub PAT (`~/.mosaic/.env`) so `init` does not re-prompt per repo |
+| **0.3.2** | Shipped: `mosaic init` adds `.env` / `.mosaic/` / `mosaic.db` to project `.gitignore` |
 | **0.4.0** | Planned: chat provider → model list → API key setup UX (CLI/TUI) |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |
