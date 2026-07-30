@@ -1,4 +1,4 @@
-"""Tests for chat API key lookup, verify, and persistence."""
+"""Tests for chat API key lookup, verify, provider aliases, and persistence."""
 
 from __future__ import annotations
 
@@ -12,11 +12,16 @@ from ai.chat import (
     DEFAULT_CHAT_MODEL,
     DEFAULT_GROQ_CHAT_MODEL,
     GROQ_API_BASE,
+    OPENAI_API_BASE,
+    OPENROUTER_API_BASE,
     ChatError,
     ChatSettings,
     default_chat_model_for_base,
+    format_api_base_for_display,
     get_chat_settings,
     peek_chat_settings,
+    resolve_chat_provider,
+    sample_models_for_provider,
     verify_chat_settings,
 )
 from core import config as cfg
@@ -109,18 +114,71 @@ class ChatSettingsLookupTests(unittest.TestCase):
                 self.assertEqual(os.environ.get("CHAT_API_KEY"), "gsk-test-not-openai")
 
 
-class DefaultChatModelForBaseTests(unittest.TestCase):
-    def test_groq_base_uses_groq_model(self) -> None:
+class ResolveChatProviderTests(unittest.TestCase):
+    def test_aliases_case_insensitive(self) -> None:
+        for raw in ("Groq", "groq", "GROQ", "2"):
+            resolved = resolve_chat_provider(raw)
+            self.assertEqual(resolved.provider_id, "groq")
+            self.assertEqual(resolved.api_base, GROQ_API_BASE)
+            self.assertTrue(resolved.from_alias)
+
+        for raw in ("openai", "OpenAI", "OAI", "1", ""):
+            resolved = resolve_chat_provider(raw)
+            self.assertEqual(resolved.provider_id, "openai")
+            self.assertIsNone(resolved.api_base)
+
+        for raw in ("OpenRouter", "openrouter", "open-router", "3"):
+            resolved = resolve_chat_provider(raw)
+            self.assertEqual(resolved.provider_id, "openrouter")
+            self.assertEqual(resolved.api_base, OPENROUTER_API_BASE)
+
+    def test_custom_url_passthrough(self) -> None:
+        url = "https://api.together.xyz/v1"
+        resolved = resolve_chat_provider(url)
+        self.assertEqual(resolved.provider_id, "custom")
+        self.assertEqual(resolved.api_base, url)
+        self.assertFalse(resolved.from_alias)
+
+    def test_known_url_maps_provider(self) -> None:
+        resolved = resolve_chat_provider(GROQ_API_BASE)
+        self.assertEqual(resolved.provider_id, "groq")
+        self.assertEqual(resolved.api_base, GROQ_API_BASE.rstrip("/"))
+
+    def test_unknown_name_raises(self) -> None:
+        with self.assertRaises(ChatError) as ctx:
+            resolve_chat_provider("NotAProvider")
+        self.assertIn("Unknown chat provider", str(ctx.exception))
+
+    def test_custom_choice_needs_url(self) -> None:
+        resolved = resolve_chat_provider("custom")
+        self.assertEqual(resolved.provider_id, "custom")
+        self.assertIsNone(resolved.api_base)
+
+
+class SampleModelsTests(unittest.TestCase):
+    def test_samples_per_provider(self) -> None:
+        openai_samples = sample_models_for_provider("openai")
+        self.assertIn("gpt-4o-mini", openai_samples)
+        self.assertTrue(len(openai_samples) >= 2)
+
+        groq_samples = sample_models_for_provider("Groq")
+        self.assertEqual(groq_samples[0], DEFAULT_GROQ_CHAT_MODEL)
+        self.assertIn("openai/gpt-oss-20b", groq_samples)
+
+        openrouter_samples = sample_models_for_provider("openrouter")
+        self.assertTrue(len(openrouter_samples) >= 2)
+
+        self.assertEqual(sample_models_for_provider("custom"), [])
+
+    def test_default_model_for_base(self) -> None:
         self.assertEqual(
             default_chat_model_for_base(GROQ_API_BASE),
             DEFAULT_GROQ_CHAT_MODEL,
         )
-
-    def test_blank_or_openai_uses_default(self) -> None:
         self.assertEqual(default_chat_model_for_base(None), DEFAULT_CHAT_MODEL)
         self.assertEqual(default_chat_model_for_base(""), DEFAULT_CHAT_MODEL)
         self.assertEqual(
-            default_chat_model_for_base("https://api.openai.com/v1"),
+            default_chat_model_for_base(OPENAI_API_BASE),
             DEFAULT_CHAT_MODEL,
         )
 
@@ -158,16 +216,28 @@ class VerifyChatSettingsTests(unittest.TestCase):
             base_url=GROQ_API_BASE,
         )
 
-    def test_verify_raises_on_api_failure(self) -> None:
+    def test_verify_raises_on_api_failure_includes_base_not_key(self) -> None:
         mock_client = MagicMock()
         mock_client.chat.completions.create.side_effect = RuntimeError("bad key")
         mock_openai = MagicMock(return_value=mock_client)
         with patch("openai.OpenAI", mock_openai):
             with self.assertRaises(ChatError) as ctx:
                 verify_chat_settings(
-                    ChatSettings(api_key="sk-bad", model="gpt-4o-mini")
+                    ChatSettings(
+                        api_key="sk-secret-should-not-leak",
+                        model="gpt-4o-mini",
+                        api_base=GROQ_API_BASE,
+                    )
                 )
-        self.assertIn("verification failed", str(ctx.exception).lower())
+        msg = str(ctx.exception)
+        self.assertIn("verification failed", msg.lower())
+        self.assertIn(GROQ_API_BASE, msg)
+        self.assertIn("gpt-4o-mini", msg)
+        self.assertNotIn("sk-secret-should-not-leak", msg)
+
+    def test_format_api_base_for_display(self) -> None:
+        self.assertEqual(format_api_base_for_display(None), OPENAI_API_BASE)
+        self.assertEqual(format_api_base_for_display(GROQ_API_BASE), GROQ_API_BASE)
 
 
 class EnsureChatCredentialsTests(unittest.TestCase):
@@ -208,6 +278,13 @@ class EnsureChatCredentialsTests(unittest.TestCase):
             global_env = home_mosaic / ".env"
             project_env = Path(tmp) / "project.env"
 
+            def prompt_side_effect(text, default="", show_default=True):
+                if "Choose provider" in text:
+                    return "1"
+                if "Choose model" in text:
+                    return "1"
+                return default
+
             with patch.object(cfg, "GLOBAL_MOSAIC_DIR", home_mosaic), patch.object(
                 cfg, "GLOBAL_ENV_PATH", global_env
             ), patch.object(cfg, "ENV_PATH", project_env), patch.object(
@@ -219,7 +296,7 @@ class EnsureChatCredentialsTests(unittest.TestCase):
             ), patch.object(
                 cli_main.typer,
                 "prompt",
-                side_effect=["", "gpt-4o-mini"],
+                side_effect=prompt_side_effect,
             ), patch.object(
                 cli_main.typer, "confirm", return_value=True
             ), patch.object(
@@ -241,19 +318,23 @@ class EnsureChatCredentialsTests(unittest.TestCase):
                 self.assertNotIn("CHAT_API_BASE", text)
                 self.assertEqual(os.environ.get("CHAT_API_KEY"), "sk-new")
 
-    def test_prompts_groq_base_and_saves_base(self) -> None:
+    def test_prompts_groq_alias_and_saves_base(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home_mosaic = Path(tmp) / ".mosaic"
             global_env = home_mosaic / ".env"
             project_env = Path(tmp) / "project.env"
-
-            prompt_defaults: list = []
+            echo_lines: list = []
 
             def prompt_side_effect(text, default="", show_default=True):
-                prompt_defaults.append(default)
-                if "base URL" in text:
-                    return GROQ_API_BASE
+                if "Choose provider" in text:
+                    return "Groq"
+                if "Choose model" in text:
+                    return "1"
                 return default
+
+            def echo_side_effect(*args, **kwargs):
+                if args:
+                    echo_lines.append(str(args[0]))
 
             with patch.object(cfg, "GLOBAL_MOSAIC_DIR", home_mosaic), patch.object(
                 cfg, "GLOBAL_ENV_PATH", global_env
@@ -270,7 +351,7 @@ class EnsureChatCredentialsTests(unittest.TestCase):
             ), patch.object(
                 cli_main, "verify_chat_settings"
             ) as mock_verify, patch.object(
-                cli_main.typer, "echo"
+                cli_main.typer, "echo", side_effect=echo_side_effect
             ), patch.object(
                 cli_main.typer, "secho"
             ):
@@ -280,13 +361,13 @@ class EnsureChatCredentialsTests(unittest.TestCase):
                 self.assertEqual(settings.api_key, "gsk_groq_key")
                 self.assertEqual(settings.api_base, GROQ_API_BASE)
                 self.assertEqual(settings.model, DEFAULT_GROQ_CHAT_MODEL)
-                # Model prompt should default to Groq after base is known.
-                self.assertIn(DEFAULT_GROQ_CHAT_MODEL, prompt_defaults)
                 text = global_env.read_text()
                 self.assertIn("CHAT_API_KEY=gsk_groq_key", text)
                 self.assertIn(f"CHAT_MODEL={DEFAULT_GROQ_CHAT_MODEL}", text)
                 self.assertIn(f"CHAT_API_BASE={GROQ_API_BASE}", text)
-
-
-if __name__ == "__main__":
-    unittest.main()
+                joined = "\n".join(echo_lines)
+                self.assertIn("Resolved provider Groq", joined)
+                self.assertIn(GROQ_API_BASE, joined)
+                self.assertIn("Verifying chat credentials", joined)
+                self.assertIn("Chat credentials verified", joined)
+                self.assertNotIn("gsk_groq_key", joined)

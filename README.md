@@ -61,8 +61,8 @@ mosaic sync                  # later: only new PRs + delta vectors
 
 # Chat for check (prompted on first `mosaic check` if missing — any OpenAI-compatible provider):
 # CHAT_API_KEY=...                  # OpenAI, Groq, OpenRouter, … (also ~/.mosaic/.env)
-# CHAT_MODEL=gpt-4o-mini            # or e.g. llama-3.3-70b-versatile for Groq
-# CHAT_API_BASE=...                 # blank = OpenAI; Groq: https://api.groq.com/openai/v1
+# CHAT_MODEL=gpt-4o-mini            # or e.g. openai/gpt-oss-20b for Groq
+# CHAT_API_BASE=...                 # blank = OpenAI; or set via provider alias on first check
 
 mosaic check                 # auto git diff vs main/master
 # git diff main | mosaic check --stdin
@@ -127,5 +127,6 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 | **0.3.2** | Shipped: `mosaic init` adds `.env` / `.mosaic/` / `mosaic.db` to project `.gitignore` |
 | **0.3.3** | Shipped: `mosaic check` prompts + verifies chat API key (global `~/.mosaic/.env` by default) |
 | **0.3.4** | Shipped: chat prompt is OpenAI-compatible BYOK (base URL examples + Groq-aware model default) |
-| **0.4.0** | Planned: chat provider → model list → API key setup UX (CLI/TUI) |
+| **0.3.5** | Shipped: provider aliases + sample models + credential-setup logging for `mosaic check` |
+| **0.4.0** | Planned: fuller chat provider → model list → API key TUI |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |

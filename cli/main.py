@@ -9,13 +9,18 @@ from typing import Dict, List, Optional, Set
 import typer
 
 from ai.chat import (
+    DEFAULT_CHAT_MODEL,
     GROQ_API_BASE,
     OPENAI_API_BASE,
     OPENROUTER_API_BASE,
     ChatError,
     ChatSettings,
-    default_chat_model_for_base,
+    ResolvedChatProvider,
+    default_chat_model_for_provider,
+    format_api_base_for_display,
     peek_chat_settings,
+    resolve_chat_provider,
+    sample_models_for_provider,
     verify_chat_settings,
 )
 from ai.embeddings import (
@@ -97,7 +102,7 @@ Commands:
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
   • GitHub PAT is stored once in ~/.mosaic/.env (MOSAIC_GITHUB_TOKEN).
-  • check prompts for OpenAI-compatible CHAT_API_KEY (+ base URL / model) if missing.
+  • check prompts for OpenAI-compatible CHAT_API_KEY (+ provider/model) if missing.
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
   • Project .env holds REPO_*; Chroma + sync state under .mosaic/ (gitignored)
@@ -544,19 +549,141 @@ def _format_feedback_block(result) -> None:
         typer.echo("")
 
 
-def _prompt_chat_api_base(default: str = "") -> Optional[str]:
-    """Prompt for an OpenAI-compatible API base URL (blank = OpenAI default)."""
-    typer.echo("API base URL examples (OpenAI-compatible):")
-    typer.echo(f"  OpenAI:     {OPENAI_API_BASE}  (or leave blank)")
-    typer.echo(f"  Groq:       {GROQ_API_BASE}")
-    typer.echo(f"  OpenRouter: {OPENROUTER_API_BASE}")
-    typer.echo("  Custom:     any OpenAI-compatible /v1 host (Together, local gateway, …)")
-    api_base_raw = typer.prompt(
-        "Chat API base URL (blank = OpenAI default)",
-        default=default,
-        show_default=bool(default),
-    ).strip()
-    return api_base_raw or None
+def _log_chat_setup(message: str) -> None:
+    """Credential-setup progress (never include API keys)."""
+    typer.echo(f"[mosaic] {message}")
+
+
+def _prompt_chat_provider(
+    default_raw: str = "1",
+) -> ResolvedChatProvider:
+    """
+    Prompt for chat provider by number, alias name, or full custom URL.
+
+    Typing ``Groq`` / ``openai`` / ``OpenRouter`` resolves to the known base URL.
+    """
+    typer.echo("\nChat provider / API base:")
+    typer.echo(f"  1) OpenAI      — {OPENAI_API_BASE}  (or leave blank)")
+    typer.echo(f"  2) Groq        — {GROQ_API_BASE}")
+    typer.echo(f"  3) OpenRouter  — {OPENROUTER_API_BASE}")
+    typer.echo("  4) Custom URL  — any OpenAI-compatible /v1 host")
+    typer.echo("Type a number, provider name (e.g. Groq), or paste a full URL.")
+
+    while True:
+        raw = typer.prompt(
+            "Choose provider",
+            default=default_raw,
+            show_default=True,
+        ).strip()
+        try:
+            resolved = resolve_chat_provider(raw)
+        except ChatError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            continue
+
+        if resolved.provider_id == "custom" and not resolved.api_base:
+            custom_url = typer.prompt(
+                "Custom OpenAI-compatible API base URL",
+                default="",
+                show_default=False,
+            ).strip()
+            if not custom_url:
+                typer.echo("Custom URL cannot be empty.")
+                continue
+            try:
+                resolved = resolve_chat_provider(custom_url)
+            except ChatError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                continue
+            if not resolved.api_base:
+                typer.echo("Enter a full https://… URL for a custom host.")
+                continue
+            resolved = ResolvedChatProvider(
+                provider_id="custom",
+                api_base=resolved.api_base,
+                display_name="Custom",
+                from_alias=False,
+            )
+
+        base_display = format_api_base_for_display(resolved.api_base)
+        if resolved.from_alias:
+            _log_chat_setup(
+                f"Resolved provider {resolved.display_name} → {base_display}"
+            )
+        else:
+            _log_chat_setup(f"Using API base {base_display}")
+        return resolved
+
+
+def _prompt_chat_model(
+    provider: ResolvedChatProvider,
+    previous_model: str = "",
+) -> str:
+    """Prompt for a chat model with numbered samples for known providers."""
+    samples = sample_models_for_provider(provider.provider_id)
+    model_default = previous_model or default_chat_model_for_provider(
+        provider.provider_id, provider.api_base
+    )
+
+    if not samples:
+        model = typer.prompt(
+            "Chat model id",
+            default=model_default or DEFAULT_CHAT_MODEL,
+        ).strip()
+        if not model:
+            typer.secho("Chat model cannot be empty.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        _log_chat_setup(f"Using chat model {model}")
+        return model
+
+    typer.echo(f"\nSample models for {provider.display_name}:")
+    for idx, name in enumerate(samples, start=1):
+        marker = "  (recommended)" if idx == 1 else ""
+        typer.echo(f"  {idx}) {name}{marker}")
+    other_n = len(samples) + 1
+    typer.echo(f"  {other_n}) Other / custom model id")
+    typer.echo("Type a number, or paste any model id the provider accepts.")
+
+    default_choice = "1"
+    if previous_model:
+        if previous_model in samples:
+            default_choice = str(samples.index(previous_model) + 1)
+        else:
+            default_choice = previous_model
+
+    while True:
+        raw = typer.prompt(
+            "Choose model",
+            default=default_choice,
+            show_default=True,
+        ).strip()
+        if not raw:
+            typer.echo("Model cannot be empty.")
+            continue
+
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(samples):
+                model = samples[n - 1]
+                _log_chat_setup(f"Using chat model {model}")
+                return model
+            if n == other_n:
+                custom = typer.prompt(
+                    "Custom model id",
+                    default=previous_model or model_default,
+                ).strip()
+                if not custom:
+                    typer.echo("Model cannot be empty.")
+                    continue
+                _log_chat_setup(f"Using chat model {custom}")
+                return custom
+            typer.echo(f"Enter 1–{other_n}, or a model id.")
+            continue
+
+        # Free-text model id (or alias-like paste of a known sample name).
+        model = raw
+        _log_chat_setup(f"Using chat model {model}")
+        return model
 
 
 def _ensure_chat_credentials() -> None:
@@ -565,7 +692,7 @@ def _ensure_chat_credentials() -> None:
 
     If CHAT_API_KEY / OPENAI_API_KEY / EMBEDDING_API_KEY is already set
     (global ~/.mosaic/.env or project .env), do nothing. Otherwise prompt for
-    an OpenAI-compatible key + optional base URL + model, verify with a cheap
+    an OpenAI-compatible key + provider/base + model, verify with a cheap
     ping, and offer to save globally by default.
     """
     existing = peek_chat_settings()
@@ -587,43 +714,48 @@ def _ensure_chat_credentials() -> None:
         if not api_key:
             typer.echo("API key cannot be empty.")
 
-    api_base = _prompt_chat_api_base()
-    model_default = default_chat_model_for_base(api_base)
-    model = typer.prompt(
-        "Chat model (must match the provider above)",
-        default=model_default,
-    ).strip()
-    if not model:
-        typer.secho("Chat model cannot be empty.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+    provider = _prompt_chat_provider()
+    api_base = provider.api_base
+    model = _prompt_chat_model(provider)
 
     while True:
         settings = ChatSettings(api_key=api_key, model=model, api_base=api_base)
+        base_display = format_api_base_for_display(api_base)
         try:
-            typer.echo("Verifying chat credentials …")
+            _log_chat_setup(
+                f"Verifying chat credentials (base={base_display}, model={model}) …"
+            )
             verify_chat_settings(settings)
             break
         except ChatError as exc:
             typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            _log_chat_setup(
+                f"Verification failed for base={base_display} model={model} "
+                "(API key not printed)."
+            )
             typer.echo(
-                "Check key, base URL, and model together — non-OpenAI keys need "
-                "the matching API base (e.g. Groq base + Groq model)."
+                "Check key, provider/base, and model together — non-OpenAI keys "
+                "need the matching API base (e.g. Groq + a Groq model)."
             )
             api_key = getpass.getpass(
                 "Re-enter OpenAI-compatible chat API key (input hidden): "
             ).strip()
             if not api_key:
                 raise typer.Exit(code=1) from exc
-            api_base = _prompt_chat_api_base(default=api_base or "")
-            model_default = default_chat_model_for_base(api_base)
-            model = (
-                typer.prompt(
-                    "Chat model (must match the provider above)",
-                    default=model if model else model_default,
-                ).strip()
-                or model_default
-            )
+            # Prefer the last resolved provider number when re-prompting.
+            default_raw = {
+                "openai": "1",
+                "groq": "2",
+                "openrouter": "3",
+                "custom": "4",
+            }.get(provider.provider_id, "1")
+            if provider.provider_id == "custom" and api_base:
+                default_raw = api_base
+            provider = _prompt_chat_provider(default_raw=default_raw)
+            api_base = provider.api_base
+            model = _prompt_chat_model(provider, previous_model=model)
 
+    _log_chat_setup("Chat credentials verified.")
     typer.secho("Chat credentials verified.", fg=typer.colors.GREEN)
 
     if typer.confirm(
