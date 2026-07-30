@@ -9,6 +9,10 @@ from typing import Any, Dict, Optional, Sequence
 from core.config import load_config
 
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+DEFAULT_GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+GROQ_API_BASE = "https://api.groq.com/openai/v1"
+OPENAI_API_BASE = "https://api.openai.com/v1"
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 
 class ChatError(RuntimeError):
@@ -20,6 +24,14 @@ class ChatSettings:
     api_key: str
     model: str
     api_base: Optional[str] = None
+
+
+def default_chat_model_for_base(api_base: Optional[str]) -> str:
+    """Pick a sensible default CHAT_MODEL for a known OpenAI-compatible host."""
+    base = (api_base or "").strip().lower()
+    if "groq.com" in base:
+        return DEFAULT_GROQ_CHAT_MODEL
+    return DEFAULT_CHAT_MODEL
 
 
 def _lookup_chat_api_key() -> str:

@@ -9,9 +9,12 @@ from typing import Dict, List, Optional, Set
 import typer
 
 from ai.chat import (
-    DEFAULT_CHAT_MODEL,
+    GROQ_API_BASE,
+    OPENAI_API_BASE,
+    OPENROUTER_API_BASE,
     ChatError,
     ChatSettings,
+    default_chat_model_for_base,
     peek_chat_settings,
     verify_chat_settings,
 )
@@ -94,7 +97,7 @@ Commands:
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
   • GitHub PAT is stored once in ~/.mosaic/.env (MOSAIC_GITHUB_TOKEN).
-  • check prompts for CHAT_API_KEY if missing (saved to ~/.mosaic/.env by default).
+  • check prompts for OpenAI-compatible CHAT_API_KEY (+ base URL / model) if missing.
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
   • Project .env holds REPO_*; Chroma + sync state under .mosaic/ (gitignored)
@@ -541,59 +544,87 @@ def _format_feedback_block(result) -> None:
         typer.echo("")
 
 
+def _prompt_chat_api_base(default: str = "") -> Optional[str]:
+    """Prompt for an OpenAI-compatible API base URL (blank = OpenAI default)."""
+    typer.echo("API base URL examples (OpenAI-compatible):")
+    typer.echo(f"  OpenAI:     {OPENAI_API_BASE}  (or leave blank)")
+    typer.echo(f"  Groq:       {GROQ_API_BASE}")
+    typer.echo(f"  OpenRouter: {OPENROUTER_API_BASE}")
+    typer.echo("  Custom:     any OpenAI-compatible /v1 host (Together, local gateway, …)")
+    api_base_raw = typer.prompt(
+        "Chat API base URL (blank = OpenAI default)",
+        default=default,
+        show_default=bool(default),
+    ).strip()
+    return api_base_raw or None
+
+
 def _ensure_chat_credentials() -> None:
     """
     Ensure a chat API key is available for mosaic check.
 
     If CHAT_API_KEY / OPENAI_API_KEY / EMBEDDING_API_KEY is already set
-    (global ~/.mosaic/.env or project .env), do nothing. Otherwise prompt,
-    verify with a cheap ping, and offer to save globally by default.
+    (global ~/.mosaic/.env or project .env), do nothing. Otherwise prompt for
+    an OpenAI-compatible key + optional base URL + model, verify with a cheap
+    ping, and offer to save globally by default.
     """
     existing = peek_chat_settings()
     if existing is not None:
         return
 
     typer.echo("Chat API key is required for mosaic check (BYOK).")
-    typer.echo("Supports OpenAI or any OpenAI-compatible endpoint.")
+    typer.echo(
+        "Use any OpenAI-compatible provider key (OpenAI, Groq, OpenRouter, "
+        "Together, local gateway, …) — not OpenAI-only."
+    )
+    typer.echo("Any key format is accepted (no sk- prefix required).")
 
     api_key = ""
     while not api_key:
-        api_key = getpass.getpass("Chat API key (input hidden): ").strip()
+        api_key = getpass.getpass(
+            "OpenAI-compatible chat API key (input hidden): "
+        ).strip()
         if not api_key:
             typer.echo("API key cannot be empty.")
 
-    model = typer.prompt("Chat model", default=DEFAULT_CHAT_MODEL).strip()
+    api_base = _prompt_chat_api_base()
+    model_default = default_chat_model_for_base(api_base)
+    model = typer.prompt(
+        "Chat model (must match the provider above)",
+        default=model_default,
+    ).strip()
     if not model:
         typer.secho("Chat model cannot be empty.", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    api_base_raw = typer.prompt(
-        "Chat API base URL (blank for OpenAI default)",
-        default="",
-        show_default=False,
-    ).strip()
-    api_base = api_base_raw or None
-
     while True:
         settings = ChatSettings(api_key=api_key, model=model, api_base=api_base)
         try:
-            typer.echo("Verifying chat API key …")
+            typer.echo("Verifying chat credentials …")
             verify_chat_settings(settings)
             break
         except ChatError as exc:
             typer.secho(str(exc), fg=typer.colors.RED, err=True)
-            api_key = getpass.getpass("Re-enter chat API key (input hidden): ").strip()
+            typer.echo(
+                "Check key, base URL, and model together — non-OpenAI keys need "
+                "the matching API base (e.g. Groq base + Groq model)."
+            )
+            api_key = getpass.getpass(
+                "Re-enter OpenAI-compatible chat API key (input hidden): "
+            ).strip()
             if not api_key:
                 raise typer.Exit(code=1) from exc
-            model = typer.prompt("Chat model", default=model).strip() or model
-            api_base_raw = typer.prompt(
-                "Chat API base URL (blank for OpenAI default)",
-                default=api_base or "",
-                show_default=False,
-            ).strip()
-            api_base = api_base_raw or None
+            api_base = _prompt_chat_api_base(default=api_base or "")
+            model_default = default_chat_model_for_base(api_base)
+            model = (
+                typer.prompt(
+                    "Chat model (must match the provider above)",
+                    default=model if model else model_default,
+                ).strip()
+                or model_default
+            )
 
-    typer.secho("Chat API key verified.", fg=typer.colors.GREEN)
+    typer.secho("Chat credentials verified.", fg=typer.colors.GREEN)
 
     if typer.confirm(
         f"Save chat settings to {GLOBAL_ENV_PATH} for all Mosaic projects?",
@@ -605,7 +636,10 @@ def _ensure_chat_credentials() -> None:
             api_base=api_base,
             env_path=GLOBAL_ENV_PATH,
         )
-        typer.echo(f"Saved CHAT_API_KEY / CHAT_MODEL to {path}")
+        saved = "CHAT_API_KEY / CHAT_MODEL"
+        if api_base:
+            saved += " / CHAT_API_BASE"
+        typer.echo(f"Saved {saved} to {path}")
     else:
         path = save_chat_settings(
             api_key=api_key,
@@ -613,7 +647,10 @@ def _ensure_chat_credentials() -> None:
             api_base=api_base,
             env_path=ENV_PATH,
         )
-        typer.echo(f"Saved CHAT_API_KEY / CHAT_MODEL to {path} (project only)")
+        saved = "CHAT_API_KEY / CHAT_MODEL"
+        if api_base:
+            saved += " / CHAT_API_BASE"
+        typer.echo(f"Saved {saved} to {path} (project only)")
 
 
 @app.command("check")

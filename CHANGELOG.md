@@ -62,6 +62,14 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-30
+
+### Fixed
+
+- **`mosaic check` chat setup is true OpenAI-compatible BYOK** — prompts clearly for any provider key (Groq, OpenRouter, Together, local gateways, …), not OpenAI-only.
+- Asks for **API base URL first** (with Groq / OpenRouter / custom examples), then model; Groq base defaults model to `llama-3.3-70b-versatile`.
+- No `sk-` key-format restriction; verification ping uses the user-provided base + key + model; saves `CHAT_API_BASE` when set.
+
 ## [0.3.3] - 2026-07-30
 
 ### Added
