@@ -8,7 +8,13 @@ from typing import Dict, List, Optional, Set
 
 import typer
 
-from ai.chat import ChatError
+from ai.chat import (
+    DEFAULT_CHAT_MODEL,
+    ChatError,
+    ChatSettings,
+    peek_chat_settings,
+    verify_chat_settings,
+)
 from ai.embeddings import (
     EmbeddingError,
     LocalEmbedder,
@@ -19,6 +25,7 @@ from ai.embeddings import (
 from core.config import (
     DEFAULT_LOCAL_MODEL,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
+    ENV_PATH,
     EmbeddingSettings,
     GLOBAL_ENV_PATH,
     ensure_mosaic_dirs,
@@ -27,6 +34,7 @@ from core.config import (
     get_repo,
     parse_repo_url,
     persist_embedding_settings,
+    save_chat_settings,
     save_global_github_token,
     write_project_env,
 )
@@ -86,7 +94,7 @@ Commands:
 Notes:
   • V1 sync only picks up new PR numbers (not new comments on existing PRs).
   • GitHub PAT is stored once in ~/.mosaic/.env (MOSAIC_GITHUB_TOKEN).
-  • check needs CHAT_API_KEY (or OPENAI_API_KEY); pipe/stdin optional.
+  • check prompts for CHAT_API_KEY if missing (saved to ~/.mosaic/.env by default).
   • API-only install:  pip install -e .
   • Local embeddings:  pip install -e '.[local]'   (or mosaic-cli[local])
   • Project .env holds REPO_*; Chroma + sync state under .mosaic/ (gitignored)
@@ -533,6 +541,81 @@ def _format_feedback_block(result) -> None:
         typer.echo("")
 
 
+def _ensure_chat_credentials() -> None:
+    """
+    Ensure a chat API key is available for mosaic check.
+
+    If CHAT_API_KEY / OPENAI_API_KEY / EMBEDDING_API_KEY is already set
+    (global ~/.mosaic/.env or project .env), do nothing. Otherwise prompt,
+    verify with a cheap ping, and offer to save globally by default.
+    """
+    existing = peek_chat_settings()
+    if existing is not None:
+        return
+
+    typer.echo("Chat API key is required for mosaic check (BYOK).")
+    typer.echo("Supports OpenAI or any OpenAI-compatible endpoint.")
+
+    api_key = ""
+    while not api_key:
+        api_key = getpass.getpass("Chat API key (input hidden): ").strip()
+        if not api_key:
+            typer.echo("API key cannot be empty.")
+
+    model = typer.prompt("Chat model", default=DEFAULT_CHAT_MODEL).strip()
+    if not model:
+        typer.secho("Chat model cannot be empty.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    api_base_raw = typer.prompt(
+        "Chat API base URL (blank for OpenAI default)",
+        default="",
+        show_default=False,
+    ).strip()
+    api_base = api_base_raw or None
+
+    while True:
+        settings = ChatSettings(api_key=api_key, model=model, api_base=api_base)
+        try:
+            typer.echo("Verifying chat API key …")
+            verify_chat_settings(settings)
+            break
+        except ChatError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            api_key = getpass.getpass("Re-enter chat API key (input hidden): ").strip()
+            if not api_key:
+                raise typer.Exit(code=1) from exc
+            model = typer.prompt("Chat model", default=model).strip() or model
+            api_base_raw = typer.prompt(
+                "Chat API base URL (blank for OpenAI default)",
+                default=api_base or "",
+                show_default=False,
+            ).strip()
+            api_base = api_base_raw or None
+
+    typer.secho("Chat API key verified.", fg=typer.colors.GREEN)
+
+    if typer.confirm(
+        f"Save chat settings to {GLOBAL_ENV_PATH} for all Mosaic projects?",
+        default=True,
+    ):
+        path = save_chat_settings(
+            api_key=api_key,
+            model=model,
+            api_base=api_base,
+            env_path=GLOBAL_ENV_PATH,
+        )
+        typer.echo(f"Saved CHAT_API_KEY / CHAT_MODEL to {path}")
+    else:
+        path = save_chat_settings(
+            api_key=api_key,
+            model=model,
+            api_base=api_base,
+            env_path=ENV_PATH,
+        )
+        typer.echo(f"Saved CHAT_API_KEY / CHAT_MODEL to {path} (project only)")
+
+
 @app.command("check")
 def check_cmd(
     top_k: int = typer.Option(
@@ -584,6 +667,12 @@ def check_cmd(
     try:
         get_embedding_settings()
     except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        _ensure_chat_credentials()
+    except ChatError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 

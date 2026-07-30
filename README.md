@@ -59,10 +59,10 @@ mosaic init                  # prompt for repo URL + PAT → .env, create tables
 mosaic build                 # full scrape + embeddings + Chroma index
 mosaic sync                  # later: only new PRs + delta vectors
 
-# Chat for check (in .env):
-# CHAT_API_KEY=...
-# CHAT_MODEL=gpt-4o-mini          # or provider model id
-# CHAT_API_BASE=...               # optional (Groq, Gemini OpenAI-compat, etc.)
+# Chat for check (prompted on first `mosaic check` if missing):
+# CHAT_API_KEY=...                  # or OPENAI_API_KEY; also ~/.mosaic/.env
+# CHAT_MODEL=gpt-4o-mini            # or provider model id
+# CHAT_API_BASE=...                 # optional (Groq, Gemini OpenAI-compat, etc.)
 
 mosaic check                 # auto git diff vs main/master
 # git diff main | mosaic check --stdin
@@ -102,8 +102,8 @@ Per-project (not a global `~/.mosaic/` profile):
 
 | Location | Contents |
 |----------|----------|
-| `.env` | `REPO_*`, embedding keys / backend; optional project `GITHUB_TOKEN`; `CHAT_API_KEY` / `CHAT_MODEL` / optional `CHAT_API_BASE` |
-| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN` (shared across projects) |
+| `.env` | `REPO_*`, embedding keys / backend; optional project `GITHUB_TOKEN`; optional project `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` |
+| `~/.mosaic/.env` | Global `MOSAIC_GITHUB_TOKEN`; optional global `CHAT_API_KEY` / `CHAT_MODEL` / `CHAT_API_BASE` (shared across projects) |
 | `.mosaic/config.json` | Non-secret build metadata (model name, chroma path, …) |
 | `.mosaic/sync_state.json` | Known PR numbers, indexed comment IDs, `last_synced_at` |
 | `.mosaic/chroma/` | Persistent vector index |
@@ -125,5 +125,6 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 | **0.3.0** | Shipped: **`mosaic check`** engine (auto-diff, retrieval, BYOK chat via env) |
 | **0.3.1** | Shipped: global GitHub PAT (`~/.mosaic/.env`) so `init` does not re-prompt per repo |
 | **0.3.2** | Shipped: `mosaic init` adds `.env` / `.mosaic/` / `mosaic.db` to project `.gitignore` |
+| **0.3.3** | Shipped: `mosaic check` prompts + verifies chat API key (global `~/.mosaic/.env` by default) |
 | **0.4.0** | Planned: chat provider → model list → API key setup UX (CLI/TUI) |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |

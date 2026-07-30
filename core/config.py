@@ -71,6 +71,45 @@ def save_global_github_token(token: str) -> Path:
     return GLOBAL_ENV_PATH
 
 
+def save_chat_settings(
+    *,
+    api_key: str,
+    model: str,
+    api_base: Optional[str] = None,
+    env_path: Path = GLOBAL_ENV_PATH,
+) -> Path:
+    """
+    Persist chat credentials to an env file (global ~/.mosaic/.env by default).
+
+    Writes CHAT_API_KEY, CHAT_MODEL, and CHAT_API_BASE when a base URL is set.
+    Also updates process env so the current run can use the values immediately.
+    """
+    cleaned_key = (api_key or "").strip()
+    cleaned_model = (model or "").strip()
+    if not cleaned_key:
+        raise ValueError("Chat API key cannot be empty.")
+    if not cleaned_model:
+        raise ValueError("Chat model cannot be empty.")
+
+    if env_path == GLOBAL_ENV_PATH:
+        ensure_global_mosaic_dir()
+
+    values: Dict[str, str] = {
+        "CHAT_API_KEY": cleaned_key,
+        "CHAT_MODEL": cleaned_model,
+    }
+    cleaned_base = (api_base or "").strip()
+    if cleaned_base:
+        values["CHAT_API_BASE"] = cleaned_base
+
+    update_env(values, env_path=env_path)
+    os.environ["CHAT_API_KEY"] = cleaned_key
+    os.environ["CHAT_MODEL"] = cleaned_model
+    if cleaned_base:
+        os.environ["CHAT_API_BASE"] = cleaned_base
+    return env_path
+
+
 def write_project_env(
     *,
     repo_owner: str,
