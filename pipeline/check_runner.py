@@ -9,7 +9,7 @@ from ai.analyzer import BaseAnalyzer, Feedback, OpenAICompatibleAnalyzer
 from ai.embeddings import Embedder
 from core.config import EmbeddingSettings
 from core.diff_parser import DiffHunk, is_trivial_diff, parse_unified_diff
-from pipeline.retriever import query_similar_comments
+from pipeline.retriever import DEFAULT_MAX_DISTANCE, query_similar_comments
 
 
 @dataclass
@@ -26,6 +26,7 @@ def run_check(
     diff_text: str,
     *,
     top_k: int = 5,
+    max_distance: float = DEFAULT_MAX_DISTANCE,
     analyzer: Optional[BaseAnalyzer] = None,
     embedder: Optional[Embedder] = None,
     settings: Optional[EmbeddingSettings] = None,
@@ -33,7 +34,8 @@ def run_check(
     """
     Run the advisory check pipeline on a unified diff string.
 
-    Skips LLM when the diff is trivial or a hunk has no retrieved history.
+    Skips LLM when the diff is trivial or a hunk has no retrieved history
+    (including after the distance gate drops weak neighbors).
     """
     if is_trivial_diff(diff_text):
         return CheckResult(
@@ -57,6 +59,7 @@ def run_check(
         past = query_similar_comments(
             hunk.as_text(),
             top_k=top_k,
+            max_distance=max_distance,
             embedder=embedder,
             settings=settings,
         )

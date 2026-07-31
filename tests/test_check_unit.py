@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from ai.analyzer import Feedback, filter_feedback, normalize_severity, parse_feedback_json
 from core.diff_parser import is_trivial_diff, parse_unified_diff
@@ -64,6 +64,23 @@ class AnalyzerPureTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].issue, "y")
 
+    def test_filter_allowed_prs_intersection(self):
+        items = [
+            Feedback("ok", "blocking", "a.py", cited_prs=[10, 99]),
+            Feedback("bad cite", "suggestion", "a.py", cited_prs=[999]),
+            Feedback("mixed", "nit", "a.py", cited_prs=[10, 50]),
+        ]
+        kept = filter_feedback(
+            items,
+            require_citations=True,
+            allowed_prs={10, 20},
+        )
+        self.assertEqual(len(kept), 2)
+        by_issue = {f.issue: f for f in kept}
+        self.assertEqual(by_issue["ok"].cited_prs, [10])
+        self.assertEqual(by_issue["mixed"].cited_prs, [10])
+        self.assertNotIn("bad cite", by_issue)
+
     def test_parse_feedback_json(self):
         raw = '[{"issue":"missing guard","severity":"blocking","file_path":"a.py","line_hint":"10","cited_prs":[1,2]}]'
         parsed = parse_feedback_json(raw, default_file_path="a.py")
@@ -71,6 +88,100 @@ class AnalyzerPureTests(unittest.TestCase):
         self.assertEqual(parsed[0].severity, "blocking")
         self.assertEqual(parsed[0].cited_prs, [1, 2])
 
+    def test_analyzer_blank_drops_empty_past(self):
+        from ai.analyzer import OpenAICompatibleAnalyzer
+
+        findings = OpenAICompatibleAnalyzer(chat=object()).check(  # type: ignore[arg-type]
+            "@@ hunk",
+            [],
+            file_path="a.py",
+        )
+        self.assertEqual(findings, [])
+
+    def test_analyzer_passes_allowed_prs_to_filter(self):
+        from ai.analyzer import CHECK_SYSTEM_PROMPT, OpenAICompatibleAnalyzer
+        from unittest.mock import MagicMock
+
+        mock_chat = MagicMock()
+        mock_chat.complete.return_value = (
+            '[{"issue":"secret","severity":"blocking","file_path":"a.py",'
+            '"line_hint":null,"cited_prs":[7,999]}]'
+        )
+        analyzer = OpenAICompatibleAnalyzer(chat=mock_chat)
+        findings = analyzer.check(
+            "@@ +api_key",
+            [{"pr_number": 7, "text": "do not hardcode keys", "author": "a", "file_path": "a.py"}],
+            file_path="a.py",
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].cited_prs, [7])
+        system_msg = mock_chat.complete.call_args.args[0][0]["content"]
+        self.assertEqual(system_msg, CHECK_SYSTEM_PROMPT)
+        self.assertIn("Prefer []", system_msg)
+
+
+class RetrieverDistanceGateTests(unittest.TestCase):
+    def test_drops_hits_above_max_distance(self):
+        from pipeline import retriever as ret
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 2
+        mock_collection.query.return_value = {
+            "ids": [["a", "b"]],
+            "documents": [["near comment", "far comment"]],
+            "metadatas": [
+                [
+                    {"pr_number": 1, "file_path": "a.py", "author": "x", "comment_type": "review_comment"},
+                    {"pr_number": 2, "file_path": "b.py", "author": "y", "comment_type": "review_comment"},
+                ]
+            ],
+            "distances": [[0.4, 1.9]],
+        }
+        mock_embedder = MagicMock()
+        mock_embedder.embed_query.return_value = [0.1, 0.2]
+        mock_settings = MagicMock()
+
+        with patch.object(
+            ret, "_get_collection", return_value=(mock_collection, "c", "/tmp")
+        ), patch.object(ret, "get_embedding_settings", return_value=mock_settings), patch.object(
+            ret, "get_embedder", return_value=mock_embedder
+        ):
+            results = ret.query_similar_comments(
+                "some hunk",
+                top_k=5,
+                max_distance=1.2,
+                embedder=mock_embedder,
+                settings=mock_settings,
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], "a")
+        self.assertEqual(results[0]["pr_number"], 1)
+
+    def test_keeps_hits_without_distance(self):
+        from pipeline import retriever as ret
+
+        mock_collection = MagicMock()
+        mock_collection.count.return_value = 1
+        mock_collection.query.return_value = {
+            "ids": [["a"]],
+            "documents": [["comment"]],
+            "metadatas": [[{"pr_number": 3, "file_path": "", "author": "", "comment_type": ""}]],
+            "distances": [[]],
+        }
+        mock_embedder = MagicMock()
+        mock_embedder.embed_query.return_value = [0.0]
+        mock_settings = MagicMock()
+
+        with patch.object(
+            ret, "_get_collection", return_value=(mock_collection, "c", "/tmp")
+        ):
+            results = ret.query_similar_comments(
+                "hunk",
+                max_distance=0.1,
+                embedder=mock_embedder,
+                settings=mock_settings,
+            )
+        self.assertEqual(len(results), 1)
 
 class GitDiffResolveTests(unittest.TestCase):
     @patch("core.git_diff._run_git")

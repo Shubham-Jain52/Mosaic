@@ -6,7 +6,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import AbstractSet, Any, Dict, List, Literal, Optional, Sequence
 
 from ai.chat import ChatError, OpenAICompatibleChat
 
@@ -14,6 +14,23 @@ Severity = Literal["blocking", "suggestion", "nit"]
 _VALID_SEVERITIES = {"blocking", "suggestion", "nit"}
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+CHECK_SYSTEM_PROMPT = (
+    "You are Mosaic check: a code-review assistant grounded ONLY in the "
+    "provided past review comments from this team's PRs. "
+    "Return a JSON array of feedback objects. Each object must have: "
+    'issue (string), severity ("blocking"|"suggestion"|"nit"), '
+    "file_path (string), line_hint (string|null), cited_prs (array of ints). "
+    "Severity rubric: "
+    "blocking = correctness or security patterns clearly echoed in the past comments; "
+    "suggestion = concrete recurring team guidance that clearly applies to this hunk; "
+    "nit = style or naming only when past comments say so. "
+    "Every finding MUST cite at least one PR number that appears in the past comments. "
+    "Prefer [] when past comments are only loosely related — do not stretch weak matches. "
+    "If nothing in the past comments clearly applies, return []. "
+    "Do not invent generic best-practice advice. "
+    "Output JSON only — no markdown prose."
+)
 
 
 @dataclass
@@ -38,8 +55,14 @@ def filter_feedback(
     items: Sequence[Feedback],
     *,
     require_citations: bool,
+    allowed_prs: Optional[AbstractSet[int]] = None,
 ) -> List[Feedback]:
-    """Pure validation: drop empty issues and uncitable advice when required."""
+    """
+    Pure validation: drop empty issues and uncitable advice when required.
+
+    When ``allowed_prs`` is set, keep a finding only if at least one cited PR
+    is in that set, and trim ``cited_prs`` to the intersection.
+    """
     out: List[Feedback] = []
     for item in items:
         issue = (item.issue or "").strip()
@@ -55,6 +78,8 @@ def filter_feedback(
             except (TypeError, ValueError):
                 continue
         cited = sorted(set(cleaned_cited))
+        if allowed_prs is not None:
+            cited = [n for n in cited if n in allowed_prs]
         if require_citations and not cited:
             continue
         out.append(
@@ -159,9 +184,15 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         if not past_comments:
             return []
 
+        allowed_prs: set[int] = set()
         comments_block = []
         for idx, comment in enumerate(past_comments, start=1):
             pr = comment.get("pr_number")
+            if pr is not None:
+                try:
+                    allowed_prs.add(int(pr))
+                except (TypeError, ValueError):
+                    pass
             pr_label = f"PR #{pr}" if pr is not None else "PR unknown"
             author = comment.get("author") or "unknown"
             path = comment.get("file_path") or ""
@@ -170,17 +201,6 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
                 f"[{idx}] {pr_label} author={author} file={path}\n{body}"
             )
 
-        system = (
-            "You are Mosaic check: a code-review assistant grounded ONLY in the "
-            "provided past review comments from this team's PRs. "
-            "Return a JSON array of feedback objects. Each object must have: "
-            'issue (string), severity ("blocking"|"suggestion"|"nit"), '
-            "file_path (string), line_hint (string|null), cited_prs (array of ints). "
-            "Every finding MUST cite at least one PR number from the past comments. "
-            "If nothing in the past comments applies, return []. "
-            "Do not invent generic best-practice advice. "
-            "Output JSON only — no markdown prose."
-        )
         user = (
             f"File under review: {file_path}\n\n"
             f"Diff hunk:\n{diff_hunk}\n\n"
@@ -190,7 +210,7 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         try:
             raw = self._chat.complete(
                 [
-                    {"role": "system", "content": system},
+                    {"role": "system", "content": CHECK_SYSTEM_PROMPT},
                     {"role": "user", "content": user},
                 ]
             )
@@ -200,4 +220,5 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         return filter_feedback(
             parse_feedback_json(raw, default_file_path=file_path),
             require_citations=True,
+            allowed_prs=allowed_prs if allowed_prs else None,
         )
