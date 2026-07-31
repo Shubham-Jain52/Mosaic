@@ -268,7 +268,13 @@ def verify_chat_settings(settings: ChatSettings) -> None:
 class OpenAICompatibleChat:
     """Chat completions via OpenAI or any OpenAI-compatible base URL."""
 
-    def __init__(self, settings: Optional[ChatSettings] = None):
+    def __init__(
+        self,
+        settings: Optional[ChatSettings] = None,
+        *,
+        rate_limit_delay_s: float = 0.2,
+        max_retries: int = 3,
+    ):
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -282,24 +288,67 @@ class OpenAICompatibleChat:
             kwargs["base_url"] = cfg.api_base
         self._client = OpenAI(**kwargs)
         self._model = cfg.model
+        self._rate_limit_delay_s = max(0.0, float(rate_limit_delay_s))
+        self._max_retries = max(1, int(max_retries))
+        self._last_call_at: Optional[float] = None
+
+    def _wait_for_rate_limit(self) -> None:
+        if self._rate_limit_delay_s <= 0:
+            return
+        import time
+
+        if self._last_call_at is None:
+            return
+        elapsed = time.monotonic() - self._last_call_at
+        remaining = self._rate_limit_delay_s - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+    @staticmethod
+    def _is_rate_limited(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        if "429" in text or "rate limit" in text or "too many requests" in text:
+            return True
+        status = getattr(exc, "status_code", None)
+        if status == 429:
+            return True
+        response = getattr(exc, "response", None)
+        if response is not None and getattr(response, "status_code", None) == 429:
+            return True
+        return False
 
     def complete(self, messages: Sequence[Dict[str, str]]) -> str:
         if not messages:
             raise ChatError("Chat messages cannot be empty.")
-        try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=list(messages),
-                temperature=0,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise ChatError(f"Chat completion failed: {exc}") from exc
 
-        choices = getattr(response, "choices", None) or []
-        if not choices:
-            raise ChatError("Chat completion returned no choices.")
-        message = choices[0].message
-        content = getattr(message, "content", None)
-        if not content or not str(content).strip():
-            raise ChatError("Chat completion returned empty content.")
-        return str(content).strip()
+        import time
+
+        last_exc: Optional[BaseException] = None
+        for attempt in range(self._max_retries):
+            self._wait_for_rate_limit()
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=list(messages),
+                    temperature=0,
+                )
+                self._last_call_at = time.monotonic()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                self._last_call_at = time.monotonic()
+                if self._is_rate_limited(exc) and attempt + 1 < self._max_retries:
+                    # Exponential backoff: 1s, 2s, 4s…
+                    time.sleep(2**attempt)
+                    continue
+                raise ChatError(f"Chat completion failed: {exc}") from exc
+
+            choices = getattr(response, "choices", None) or []
+            if not choices:
+                raise ChatError("Chat completion returned no choices.")
+            message = choices[0].message
+            content = getattr(message, "content", None)
+            if not content or not str(content).strip():
+                raise ChatError("Chat completion returned empty content.")
+            return str(content).strip()
+
+        raise ChatError(f"Chat completion failed: {last_exc}")

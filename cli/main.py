@@ -871,6 +871,18 @@ def check_cmd(
         "--top-k",
         help="Number of similar past comments to retrieve per hunk.",
     ),
+    batch_size: int = typer.Option(
+        5,
+        "--batch-size",
+        help="Max hunks per LLM call (bulk analysis to reduce API calls).",
+        min=1,
+    ),
+    rate_limit_ms: int = typer.Option(
+        200,
+        "--rate-limit-ms",
+        help="Minimum delay between LLM calls in milliseconds (rate limiting).",
+        min=0,
+    ),
     base: Optional[str] = typer.Option(
         None,
         "--base",
@@ -925,7 +937,12 @@ def check_cmd(
         raise typer.Exit(code=1) from exc
 
     try:
-        result = run_check(diff_text, top_k=top_k)
+        result = run_check(
+            diff_text,
+            top_k=top_k,
+            batch_size=batch_size,
+            rate_limit_delay_s=rate_limit_ms / 1000.0,
+        )
     except (ChatError, EmbeddingError, RuntimeError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc

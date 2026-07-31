@@ -62,6 +62,17 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-31
+
+### Added
+
+- **Bulk LLM analysis for `mosaic check`** — analyze up to 5 hunks per chat completion by default (`--batch-size`), keeping the strict 0.4.1 prompt rubric.
+- **Rate limiting** — default 200ms delay between LLM calls (`--rate-limit-ms`) plus exponential backoff retries on HTTP 429 / rate-limit errors.
+
+### Changed
+
+- `LLM calls` in the check footer now reflects batched completions (fewer calls for multi-hunk diffs).
+
 ## [0.4.1] - 2026-07-31
 
 ### Changed

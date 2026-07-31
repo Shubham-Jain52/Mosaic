@@ -20,15 +20,17 @@ CHECK_SYSTEM_PROMPT = (
     "provided past review comments from this team's PRs. "
     "Return a JSON array of feedback objects. Each object must have: "
     'issue (string), severity ("blocking"|"suggestion"|"nit"), '
-    "file_path (string), line_hint (string|null), cited_prs (array of ints). "
+    "file_path (string), line_hint (string|null), cited_prs (array of ints), "
+    "hunk_index (int, 1-based index of the hunk this finding applies to). "
     "Severity rubric: "
     "blocking = correctness or security patterns clearly echoed in the past comments; "
     "suggestion = concrete recurring team guidance that clearly applies to this hunk; "
     "nit = style or naming only when past comments say so. "
-    "Every finding MUST cite at least one PR number that appears in the past comments. "
+    "Every finding MUST cite at least one PR number that appears in that hunk's past comments. "
     "Prefer [] when past comments are only loosely related — do not stretch weak matches. "
     "If nothing in the past comments clearly applies, return []. "
-    "Do not invent generic best-practice advice. "
+    "When multiple hunks are provided, only emit findings that clearly apply to a specific hunk; "
+    "set hunk_index and file_path accordingly. Do not invent generic best-practice advice. "
     "Output JSON only — no markdown prose."
 )
 
@@ -40,6 +42,16 @@ class Feedback:
     file_path: str
     line_hint: Optional[str] = None
     cited_prs: List[int] = field(default_factory=list)
+    hunk_index: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class HunkAnalysisInput:
+    """One diff hunk plus its retrieved past comments for analysis."""
+
+    diff_hunk: str
+    past_comments: List[Dict[str, Any]]
+    file_path: str = "unknown"
 
 
 def normalize_severity(value: Any) -> Optional[Severity]:
@@ -89,6 +101,7 @@ def filter_feedback(
                 file_path=(item.file_path or "").strip() or "unknown",
                 line_hint=(item.line_hint.strip() if item.line_hint else None),
                 cited_prs=cited,
+                hunk_index=item.hunk_index,
             )
         )
     return out
@@ -139,6 +152,13 @@ def parse_feedback_json(raw: str, *, default_file_path: str) -> List[Feedback]:
             except (TypeError, ValueError):
                 continue
         line_hint = row.get("line_hint")
+        hunk_index = None
+        raw_hunk = row.get("hunk_index")
+        if raw_hunk is not None:
+            try:
+                hunk_index = int(raw_hunk)
+            except (TypeError, ValueError):
+                hunk_index = None
         parsed.append(
             Feedback(
                 issue=str(row.get("issue") or "").strip(),
@@ -146,9 +166,77 @@ def parse_feedback_json(raw: str, *, default_file_path: str) -> List[Feedback]:
                 file_path=str(row.get("file_path") or default_file_path or "unknown").strip(),
                 line_hint=str(line_hint).strip() if line_hint not in (None, "") else None,
                 cited_prs=cited,
+                hunk_index=hunk_index,
             )
         )
     return parsed
+
+
+def _allowed_prs_from_comments(past_comments: Sequence[Dict[str, Any]]) -> set[int]:
+    allowed: set[int] = set()
+    for comment in past_comments:
+        pr = comment.get("pr_number")
+        if pr is None:
+            continue
+        try:
+            allowed.add(int(pr))
+        except (TypeError, ValueError):
+            continue
+    return allowed
+
+
+def _format_past_comments(past_comments: Sequence[Dict[str, Any]]) -> str:
+    blocks: List[str] = []
+    for idx, comment in enumerate(past_comments, start=1):
+        pr = comment.get("pr_number")
+        pr_label = f"PR #{pr}" if pr is not None else "PR unknown"
+        author = comment.get("author") or "unknown"
+        path = comment.get("file_path") or ""
+        body = (comment.get("text") or "").strip()
+        blocks.append(f"[{idx}] {pr_label} author={author} file={path}\n{body}")
+    return "\n\n".join(blocks)
+
+
+def _filter_batch_feedback(
+    items: Sequence[Feedback],
+    batch: Sequence[HunkAnalysisInput],
+) -> List[Feedback]:
+    """Attach each finding to a hunk and enforce per-hunk citation sets."""
+    out: List[Feedback] = []
+    for item in items:
+        hunk: Optional[HunkAnalysisInput] = None
+        if item.hunk_index is not None and 1 <= item.hunk_index <= len(batch):
+            hunk = batch[item.hunk_index - 1]
+        else:
+            path = (item.file_path or "").strip()
+            for candidate in batch:
+                if candidate.file_path == path:
+                    hunk = candidate
+                    break
+        if hunk is None and len(batch) == 1:
+            hunk = batch[0]
+        if hunk is None:
+            continue
+        allowed = _allowed_prs_from_comments(hunk.past_comments)
+        kept = filter_feedback(
+            [
+                Feedback(
+                    issue=item.issue,
+                    severity=item.severity,
+                    file_path=item.file_path or hunk.file_path,
+                    line_hint=item.line_hint,
+                    cited_prs=item.cited_prs,
+                    hunk_index=item.hunk_index,
+                )
+            ],
+            require_citations=True,
+            allowed_prs=allowed if allowed else None,
+        )
+        for finding in kept:
+            if not finding.file_path or finding.file_path == "unknown":
+                finding.file_path = hunk.file_path
+            out.append(finding)
+    return out
 
 
 class BaseAnalyzer(ABC):
@@ -161,6 +249,21 @@ class BaseAnalyzer(ABC):
         file_path: str = "unknown",
     ) -> List[Feedback]:
         raise NotImplementedError
+
+    def check_batch(self, batch: Sequence[HunkAnalysisInput]) -> List[Feedback]:
+        """Default: analyze each hunk with a separate call."""
+        out: List[Feedback] = []
+        for item in batch:
+            if not item.past_comments:
+                continue
+            out.extend(
+                self.check(
+                    item.diff_hunk,
+                    list(item.past_comments),
+                    file_path=item.file_path,
+                )
+            )
+        return out
 
 
 class OpenAICompatibleAnalyzer(BaseAnalyzer):
@@ -180,31 +283,34 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         *,
         file_path: str = "unknown",
     ) -> List[Feedback]:
-        # Blank-drop: no relevant history → no invented advice
-        if not past_comments:
+        return self.check_batch(
+            [
+                HunkAnalysisInput(
+                    diff_hunk=diff_hunk,
+                    past_comments=past_comments,
+                    file_path=file_path,
+                )
+            ]
+        )
+
+    def check_batch(self, batch: Sequence[HunkAnalysisInput]) -> List[Feedback]:
+        work = [item for item in batch if item.past_comments]
+        if not work:
             return []
 
-        allowed_prs: set[int] = set()
-        comments_block = []
-        for idx, comment in enumerate(past_comments, start=1):
-            pr = comment.get("pr_number")
-            if pr is not None:
-                try:
-                    allowed_prs.add(int(pr))
-                except (TypeError, ValueError):
-                    pass
-            pr_label = f"PR #{pr}" if pr is not None else "PR unknown"
-            author = comment.get("author") or "unknown"
-            path = comment.get("file_path") or ""
-            body = (comment.get("text") or "").strip()
-            comments_block.append(
-                f"[{idx}] {pr_label} author={author} file={path}\n{body}"
+        sections: List[str] = []
+        for idx, item in enumerate(work, start=1):
+            sections.append(
+                f"### Hunk {idx}\n"
+                f"File: {item.file_path}\n\n"
+                f"Diff hunk:\n{item.diff_hunk}\n\n"
+                f"Past review comments:\n{_format_past_comments(item.past_comments)}"
             )
 
         user = (
-            f"File under review: {file_path}\n\n"
-            f"Diff hunk:\n{diff_hunk}\n\n"
-            f"Past review comments:\n" + "\n\n".join(comments_block)
+            f"Analyze the following {len(work)} hunk(s). "
+            "Return one JSON array of findings (possibly empty).\n\n"
+            + "\n\n".join(sections)
         )
 
         try:
@@ -217,8 +323,6 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         except ChatError:
             raise
 
-        return filter_feedback(
-            parse_feedback_json(raw, default_file_path=file_path),
-            require_citations=True,
-            allowed_prs=allowed_prs if allowed_prs else None,
-        )
+        default_path = work[0].file_path if len(work) == 1 else "unknown"
+        parsed = parse_feedback_json(raw, default_file_path=default_path)
+        return _filter_batch_feedback(parsed, work)
