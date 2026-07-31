@@ -8,18 +8,23 @@ from ai.embeddings import Embedder, get_embedder
 from core.config import EmbeddingSettings, get_embedding_settings
 from pipeline.indexer import _get_collection
 
+# Chroma distance gate (embedding spaces differ; conservative default for L2/cosine-ish).
+DEFAULT_MAX_DISTANCE = 1.2
+
 
 def query_similar_comments(
     hunk_text: str,
     *,
     top_k: int = 5,
+    max_distance: float = DEFAULT_MAX_DISTANCE,
     embedder: Optional[Embedder] = None,
     settings: Optional[EmbeddingSettings] = None,
 ) -> List[Dict[str, Any]]:
     """
     Embed ``hunk_text`` and return the top-k nearest comment documents.
 
-    Each result: id, text, pr_number, file_path, author, comment_type, distance.
+    Hits with ``distance > max_distance`` are dropped. Each result:
+    id, text, pr_number, file_path, author, comment_type, distance.
     """
     query = (hunk_text or "").strip()
     if not query:
@@ -49,6 +54,9 @@ def query_similar_comments(
     for idx, doc_id in enumerate(ids):
         meta = metadatas[idx] if idx < len(metadatas) else {}
         meta = meta or {}
+        distance = distances[idx] if idx < len(distances) else None
+        if distance is not None and float(distance) > float(max_distance):
+            continue
         pr_raw = meta.get("pr_number", "")
         try:
             pr_number = int(pr_raw) if pr_raw != "" and pr_raw is not None else None
@@ -63,7 +71,7 @@ def query_similar_comments(
                 "author": meta.get("author") or "",
                 "comment_type": meta.get("comment_type") or "",
                 "pr_title": meta.get("pr_title") or "",
-                "distance": distances[idx] if idx < len(distances) else None,
+                "distance": distance,
             }
         )
     return results

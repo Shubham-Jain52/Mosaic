@@ -32,6 +32,7 @@ def _chroma_safe_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
 def _get_collection(cfg: EmbeddingSettings, *, reset: bool):
     try:
         import chromadb
+        from chromadb.config import Settings
     except ImportError as exc:
         raise RuntimeError(
             "chromadb is not installed. Run: pip install chromadb"
@@ -39,7 +40,10 @@ def _get_collection(cfg: EmbeddingSettings, *, reset: bool):
 
     chroma_path = Path(cfg.chroma_path or CHROMA_DIR)
     chroma_path.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(chroma_path))
+    client = chromadb.PersistentClient(
+        path=str(chroma_path),
+        settings=Settings(anonymized_telemetry=False),
+    )
     collection_name = cfg.collection_name or DEFAULT_COLLECTION_NAME
     if reset:
         try:

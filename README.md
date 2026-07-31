@@ -132,4 +132,5 @@ Do not commit `.env`, `.mosaic/`, or `mosaic.db`.
 | **0.3.4** | Shipped: chat prompt is OpenAI-compatible BYOK (base URL examples + Groq-aware model default) |
 | **0.3.5** | Shipped: provider aliases + sample models + credential-setup logging for `mosaic check` |
 | **0.4.0** | Shipped: **`mosaic settings`** — view/change chat LLM settings anytime (embeddings stay via `build`) |
+| **0.4.1** | Shipped: quieter `check` output + stricter findings (prompt + citation/distance filters) |
 | **Toward v1.0.0+** | `ask`, `describe`, hard gate, fuller TUI, PyPI, sync gaps — see [docs/ROADMAP.md](docs/ROADMAP.md) |

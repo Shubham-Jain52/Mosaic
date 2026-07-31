@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import getpass
+import os
 import sys
 from typing import Dict, List, Optional, Set
+
+# Quiet third-party noise before Chroma / tokenizers initialize.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import typer
 
@@ -535,6 +540,11 @@ def _format_feedback_block(result) -> None:
         return
 
     order = {"blocking": 0, "suggestion": 1, "nit": 2}
+    severity_color = {
+        "blocking": typer.colors.RED,
+        "suggestion": typer.colors.YELLOW,
+        "nit": typer.colors.WHITE,
+    }
     sorted_items = sorted(
         result.feedback,
         key=lambda f: (order.get(f.severity, 9), f.file_path, f.issue),
@@ -547,7 +557,12 @@ def _format_feedback_block(result) -> None:
         loc = item.file_path
         if item.line_hint:
             loc = f"{loc}:{item.line_hint}"
-        typer.echo(f"[{item.severity.upper()}] {loc}")
+        color = severity_color.get(item.severity)
+        typer.secho(
+            f"[{item.severity.upper()}] {loc}",
+            fg=color,
+            dim=(item.severity == "nit"),
+        )
         typer.echo(f"  {item.issue}")
         typer.echo(f"  cited: {cites}")
         typer.echo("")

@@ -62,6 +62,15 @@ Commits: `93812c0`.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-31
+
+### Changed
+
+- **Quieter `mosaic check`** — disable Chroma anonymized telemetry and set `TOKENIZERS_PARALLELISM=false` so dependency spam no longer clutters the findings report.
+- **Stricter analyzer prompt** — severity rubric + prefer `[]` over stretch matches on loosely related past comments.
+- **Finding quality filters** — cite only PRs present in retrieved comments; drop Chroma hits with distance above `1.2` (embedding spaces differ; conservative default).
+- **Colored severity labels** — BLOCKING red, SUGGESTION yellow, NIT dim white.
+
 ## [0.4.0] - 2026-07-30
 
 ### Added
