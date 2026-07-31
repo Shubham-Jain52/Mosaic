@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mosaic-cli"
-version = "0.4.1"
+version = "0.4.2"
 description = "Local-first BYOK CLI: index GitHub PR review history and run mosaic check for cited, advisory feedback."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -119,6 +119,107 @@ class AnalyzerPureTests(unittest.TestCase):
         self.assertEqual(system_msg, CHECK_SYSTEM_PROMPT)
         self.assertIn("Prefer []", system_msg)
 
+    def test_check_batch_one_llm_call_for_multiple_hunks(self):
+        from ai.analyzer import HunkAnalysisInput, OpenAICompatibleAnalyzer
+        from unittest.mock import MagicMock
+
+        mock_chat = MagicMock()
+        mock_chat.complete.return_value = (
+            "["
+            '{"issue":"secret","severity":"blocking","file_path":"a.py",'
+            '"line_hint":null,"cited_prs":[1],"hunk_index":1},'
+            '{"issue":"unused","severity":"nit","file_path":"b.py",'
+            '"line_hint":null,"cited_prs":[2],"hunk_index":2}'
+            "]"
+        )
+        analyzer = OpenAICompatibleAnalyzer(chat=mock_chat)
+        findings = analyzer.check_batch(
+            [
+                HunkAnalysisInput(
+                    diff_hunk="+api_key",
+                    past_comments=[
+                        {"pr_number": 1, "text": "no secrets", "author": "a", "file_path": "a.py"}
+                    ],
+                    file_path="a.py",
+                ),
+                HunkAnalysisInput(
+                    diff_hunk="+flag=True",
+                    past_comments=[
+                        {"pr_number": 2, "text": "remove unused", "author": "b", "file_path": "b.py"}
+                    ],
+                    file_path="b.py",
+                ),
+            ]
+        )
+        mock_chat.complete.assert_called_once()
+        self.assertEqual(len(findings), 2)
+        self.assertEqual({f.file_path for f in findings}, {"a.py", "b.py"})
+
+
+class CheckRunnerBatchTests(unittest.TestCase):
+    def test_run_check_batches_hunks(self):
+        from core.diff_parser import DiffHunk
+        from pipeline import check_runner as cr
+
+        hunks = [
+            DiffHunk(file_path="a.py", header="@@ -1 +1 @@", body="+a"),
+            DiffHunk(file_path="b.py", header="@@ -1 +1 @@", body="+b"),
+            DiffHunk(file_path="c.py", header="@@ -1 +1 @@", body="+c"),
+        ]
+        mock_analyzer = MagicMock()
+        mock_analyzer.check_batch.side_effect = [
+            [Feedback("x", "blocking", "a.py", cited_prs=[1])],
+            [],
+        ]
+
+        with patch.object(cr, "is_trivial_diff", return_value=False), patch.object(
+            cr, "parse_unified_diff", return_value=hunks
+        ), patch.object(
+            cr,
+            "query_similar_comments",
+            return_value=[{"pr_number": 1, "text": "t", "author": "a", "file_path": "a.py"}],
+        ):
+            result = cr.run_check(
+                "diff",
+                batch_size=2,
+                rate_limit_delay_s=0,
+                analyzer=mock_analyzer,
+            )
+
+        # 3 hunks with history, batch_size=2 → 2 LLM calls
+        self.assertEqual(result.llm_call_count, 2)
+        self.assertEqual(mock_analyzer.check_batch.call_count, 2)
+        self.assertEqual(result.hunk_count, 3)
+        self.assertEqual(len(result.feedback), 1)
+
+
+class ChatRateLimitTests(unittest.TestCase):
+    def test_retries_on_429_then_succeeds(self):
+        from ai.chat import OpenAICompatibleChat, ChatSettings
+
+        mock_client = MagicMock()
+        ok = MagicMock()
+        ok.choices = [MagicMock(message=MagicMock(content="[]"))]
+        mock_client.chat.completions.create.side_effect = [
+            RuntimeError("Error code: 429 - rate limit exceeded"),
+            ok,
+        ]
+
+        with patch("openai.OpenAI", return_value=mock_client), patch(
+            "time.sleep"
+        ) as mock_sleep:
+            chat = OpenAICompatibleChat(
+                ChatSettings(api_key="k", model="m"),
+                rate_limit_delay_s=0,
+                max_retries=3,
+            )
+            chat._client = mock_client
+            out = chat.complete([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(out, "[]")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+        mock_sleep.assert_called()
+
 
 class RetrieverDistanceGateTests(unittest.TestCase):
     def test_drops_hits_above_max_distance(self):
